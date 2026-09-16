@@ -250,10 +250,12 @@ tasks.test {
 // `createDistributable` о них не знает, поэтому докладываем их сами — после
 // него, потому что он пересоздаёт каталог образа целиком.
 //
-// Установщики (msi/dmg/deb) плагинов не получают: jpackage собирает их не из
-// образа, а из каталога с jar-ами, и всё положенное туда попало бы в classpath
-// приложения — плагины перестали бы выгружаться и перезагружаться. Комплект
-// для раздачи собирает releaseDist.
+// Установщики на macOS (dmg, pkg) Compose собирает из готового образа — они
+// получают плагины и скрипты вместе с ним, но только если копирование
+// отработало раньше упаковки (см. ниже). На Windows и Linux msi и deb
+// собираются не из образа, а из каталога с jar-ами, и всё положенное туда
+// попало бы в classpath приложения — плагины перестали бы выгружаться. Там
+// комплект для раздачи собирает только releaseDist.
 val copyPluginsToImage by tasks.registering(Sync::class) {
     group = "distribution"
     description = "Кладёт плагины рядом с приложением внутри образа"
@@ -277,6 +279,13 @@ val copyScriptsToImage by tasks.registering(Sync::class) {
 
 tasks.matching { it.name == "createDistributable" }.configureEach {
     finalizedBy(copyPluginsToImage, copyScriptsToImage)
+}
+
+// На macOS установщик читает образ, в который пишут задачи копирования.
+// Без явной зависимости Gradle отказывается собирать: вывод чужой задачи
+// используется без объявления — и порядок не гарантирован.
+tasks.matching { it.name == "packageDmg" || it.name == "packagePkg" }.configureEach {
+    dependsOn(copyPluginsToImage, copyScriptsToImage)
 }
 
 // Только для запуска из Gradle: в дистрибутиве плагины лежат рядом с приложением,

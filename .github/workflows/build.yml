@@ -101,6 +101,23 @@ jobs:
           # приложения, они перестали бы выгружаться
           ! grep -r 'plugins' --include='*.cfg' "$root"
 
+      # На macOS установщик собирается из готового образа и должен получить
+      # плагины вместе с ним. Упаковку никто, кроме CI, на маке не гоняет —
+      # без этой проверки поломка всплывает только у контрибьютора
+      - name: Собрать и проверить DMG
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          ./gradlew packageDmg
+          dmg=$(ls build/compose/binaries/main/dmg/*.dmg)
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
+          found=$(find "$mnt" -name 'assistant.jar' -o -name 'ai-control.jar')
+          echo "$found"
+          test -n "$(find "$mnt" -path '*Contents/scripts' -type d)"
+          hdiutil detach "$mnt"
+          test "$(echo "$found" | grep -c jar)" -eq 2
+
       # Каталогом, а не архивом: upload-artifact пакует сам, и готовый zip
       # внутри давал бы архив в архиве
       - uses: actions/upload-artifact@v7
