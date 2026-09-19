@@ -173,4 +173,82 @@ class MsdpParserTest {
         val result = parser.parse(byteArrayOf())
         assertTrue(result.isEmpty())
     }
+
+    @Test
+    fun `parse ROOM with cyrillic name under UTF-8`() {
+        // Позиция в буфере считается в байтах: русская буква занимает два, и счёт по длине
+        // декодированной строки уводил бы разбор в середину символа.
+        val data = byteArrayOf(MsdpParser.MSDP_VAR) + "ROOM".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL, MsdpParser.MSDP_TABLE_OPEN) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "VNUM".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "27001".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "NAME".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "Площадь".toByteArray(Charsets.UTF_8) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "AREA".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "Суздаль".toByteArray(Charsets.UTF_8) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "EXITS".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL, MsdpParser.MSDP_TABLE_OPEN) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "n".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "27002".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_TABLE_CLOSE) +
+                byteArrayOf(MsdpParser.MSDP_TABLE_CLOSE)
+
+        val result = parser.parse(data)
+
+        @Suppress("UNCHECKED_CAST")
+        val room = result["ROOM"] as Map<String, Any>
+        assertEquals("27001", room["VNUM"])
+        assertEquals("Площадь", room["NAME"])
+        assertEquals("Суздаль", room["AREA"])
+        @Suppress("UNCHECKED_CAST")
+        val exits = room["EXITS"] as Map<String, Any>
+        assertEquals("27002", exits["n"])
+    }
+
+    @Test
+    fun `parse GROUP as array of tables`() {
+        // GROUP сервер шлёт массивом таблиц. Раньше разбор массива умел только строки и
+        // на TABLE_OPEN зацикливался: позиция не двигалась, выход из цикла не срабатывал.
+        val data = byteArrayOf(MsdpParser.MSDP_VAR) + "GROUP".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL, MsdpParser.MSDP_ARRAY_OPEN) +
+                byteArrayOf(MsdpParser.MSDP_TABLE_OPEN) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "NAME".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "Мородей".toByteArray(Charsets.UTF_8) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "IS_LEADER".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "1".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_TABLE_CLOSE) +
+                byteArrayOf(MsdpParser.MSDP_TABLE_OPEN) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "NAME".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "Ванар".toByteArray(Charsets.UTF_8) +
+                byteArrayOf(MsdpParser.MSDP_TABLE_CLOSE) +
+                byteArrayOf(MsdpParser.MSDP_ARRAY_CLOSE)
+
+        val result = parser.parse(data)
+
+        @Suppress("UNCHECKED_CAST")
+        val group = result["GROUP"] as List<Any>
+        assertEquals(2, group.size)
+        @Suppress("UNCHECKED_CAST")
+        val first = group[0] as Map<String, Any>
+        assertEquals("Мородей", first["NAME"])
+        assertEquals("1", first["IS_LEADER"])
+        @Suppress("UNCHECKED_CAST")
+        val second = group[1] as Map<String, Any>
+        assertEquals("Ванар", second["NAME"])
+    }
+
+    @Test
+    fun `parse uses the session encoding`() {
+        // Сервер отдаёт MSDP в кодировке сессии, а не всегда в UTF-8.
+        val koi8 = MsdpParser("koi8-r")
+        val data = byteArrayOf(MsdpParser.MSDP_VAR) + "ROOM".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL, MsdpParser.MSDP_TABLE_OPEN) +
+                byteArrayOf(MsdpParser.MSDP_VAR) + "NAME".toByteArray() +
+                byteArrayOf(MsdpParser.MSDP_VAL) + "Площадь".toByteArray(charset("koi8-r")) +
+                byteArrayOf(MsdpParser.MSDP_TABLE_CLOSE)
+
+        @Suppress("UNCHECKED_CAST")
+        val room = koi8.parse(data)["ROOM"] as Map<String, Any>
+        assertEquals("Площадь", room["NAME"])
+    }
 }
