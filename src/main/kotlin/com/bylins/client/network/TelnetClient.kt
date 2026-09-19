@@ -46,7 +46,7 @@ class TelnetClient(
     }
 
     private val telnetParser = TelnetParser(encoding)
-    private val msdpParser = MsdpParser()
+    private val msdpParser = MsdpParser(encoding)
     private val gmcpParser = GmcpParser()
 
     /**
@@ -54,6 +54,9 @@ class TelnetClient(
      */
     fun setEncoding(encoding: String) {
         telnetParser.setEncoding(encoding)
+        // MSDP приходит в той же кодировке, что и основной поток: названия комнат сервер
+        // перекодирует на своей стороне под кодировку сессии.
+        msdpParser.setEncoding(encoding)
         logger.info { "Encoding changed to: $encoding" }
     }
 
