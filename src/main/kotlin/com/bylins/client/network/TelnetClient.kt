@@ -71,13 +71,16 @@ class TelnetClient(
                 disconnect()
             }
 
+            // Видно, куда пошли и чем кончилось: раньше при неудаче в окне не появлялось
+            // ничего, ошибка уходила только во всплывающее сообщение.
+            appendToBuffer("\u001B[1;33m[Подключение к $host:$port...]\u001B[0m\n")
+
             socket = Socket(host, port)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
             _isConnected.value = true
 
-            // Уведомляем пользователя об успешном подключении
-            appendToBuffer("\u001B[1;32m[Connected to $host:$port]\u001B[0m\n\n")
+            appendToBuffer("\u001B[1;32m[Соединение с $host:$port установлено]\u001B[0m\n\n")
 
             // Отправляем поддерживаемые опции Telnet
             sendTelnetNegotiation()
@@ -111,7 +114,7 @@ class TelnetClient(
 
             // Уведомляем пользователя о разрыве соединения (только если были подключены)
             if (wasConnected) {
-                appendToBuffer("\u001B[1;31m[Disconnected]\u001B[0m\n")
+                appendToBuffer("\u001B[1;31m[Соединение разорвано]\u001B[0m\n")
             }
         }
     }
