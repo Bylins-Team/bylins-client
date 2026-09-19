@@ -64,6 +64,10 @@ class TelnetClient(
     // Уменьшено для экономии памяти - вкладки хранят свою историю отдельно
     private val MAX_BUFFER_SIZE = 1024 * 1024 // 1 MB
 
+    // Сколько ждать продолжения строки, прежде чем отдать хвост на экран. Столько же
+    // задерживается промпт -- на глаз незаметно, а строки собираются целиком.
+    private val PENDING_FLUSH_MS = 60L
+
     suspend fun connect(host: String, port: Int) = withContext(Dispatchers.IO) {
         try {
             // Убеждаемся что предыдущее соединение закрыто
@@ -92,6 +96,8 @@ class TelnetClient(
 
     fun disconnect() {
         try {
+            pendingFlushJob?.cancel()
+            flushPendingLine()
             readJob?.cancel()
             inputStream?.close()
             outputStream?.close()
@@ -263,6 +269,66 @@ class TelnetClient(
         }
     }
 
+    // Недочитанная строка. TCP режет поток где придётся, и длинная строка приезжает
+    // двумя кусками: триггеры на половинках не совпадают, подсветка не появляется, gag не
+    // срабатывает. Поэтому триггерам отдаём только строки, дошедшие целиком, а хвост держим
+    // до перевода строки. Хвост без продолжения -- это промпт, его отдаём по таймауту, иначе
+    // он не появился бы на экране до следующего сообщения.
+    private val pendingLine = StringBuilder()
+    private val pendingLock = Any()
+    private var pendingFlushJob: Job? = null
+
+    internal fun handleIncomingText(text: String) {
+        val complete = synchronized(pendingLock) {
+            pendingLine.append(text)
+            val lastNewline = pendingLine.lastIndexOf("\n")
+            if (lastNewline == -1) {
+                ""
+            } else {
+                val done = pendingLine.substring(0, lastNewline + 1)
+                pendingLine.delete(0, lastNewline + 1)
+                done
+            }
+        }
+
+        if (complete.isNotEmpty()) {
+            val modifiedText = clientState?.processIncomingText(complete) ?: complete
+            appendToBuffer(modifiedText)
+        }
+
+        schedulePendingFlush()
+    }
+
+    private fun schedulePendingFlush() {
+        pendingFlushJob?.cancel()
+
+        val hasPending = synchronized(pendingLock) { pendingLine.isNotEmpty() }
+        if (!hasPending) {
+            return
+        }
+
+        pendingFlushJob = CoroutineScope(Dispatchers.IO).launch {
+            delay(PENDING_FLUSH_MS)
+            flushPendingLine()
+        }
+    }
+
+    /** Отдать недочитанный хвост как есть: продолжения не будет. */
+    internal fun flushPendingLine() {
+        val tail = synchronized(pendingLock) {
+            val current = pendingLine.toString()
+            pendingLine.setLength(0)
+            current
+        }
+
+        if (tail.isEmpty()) {
+            return
+        }
+
+        val modifiedText = clientState?.processIncomingText(tail) ?: tail
+        appendToBuffer(modifiedText)
+    }
+
     private fun startReading() {
         readJob = CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -287,9 +353,7 @@ class TelnetClient(
                     telnetCommands.forEach { handleTelnetCommand(it) }
 
                     if (text.isNotEmpty()) {
-                        // Обрабатываем текст триггерами и получаем модифицированную версию с colorize
-                        val modifiedText = clientState?.processIncomingText(text) ?: text
-                        appendToBuffer(modifiedText)
+                        handleIncomingText(text)
                     }
                 }
             } catch (e: IOException) {
