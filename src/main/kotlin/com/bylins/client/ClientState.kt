@@ -1476,11 +1476,7 @@ class ClientState {
                 val triggerWithColor = allMatches.firstOrNull { it.trigger.colorize != null }
                 if (triggerWithColor != null) {
                     val colorize = triggerWithColor.trigger.colorize!!
-                    // Цвет текста перекрашивает строку целиком, поэтому серверные коды в ней
-                    // только мешают -- красим очищенную. А вот подсветка фоном или жирным
-                    // цвета сервера не заменяет, и терять их незачем.
-                    val base = if (colorize.foreground != null) cleanLine else line
-                    val colorizedLine = applyColorize(base, colorize)
+                    val colorizedLine = applyColorize(cleanLine, colorize)
                     modifiedLines.add(colorizedLine)
                 } else {
                     modifiedLines.add(line)
@@ -1511,10 +1507,10 @@ class ClientState {
             }
         }
 
-        // Хвостовой перевод строки восстанавливать не надо: lines() на тексте с ним даёт
-        // последним элементом пустую строку, и цикл выше уже вернул перевод на место.
-        // Лишний append удваивал его и добавлял пустую строку на каждый кусок, который
-        // приходил ровно по границе строки.
+        // Если оригинальный текст заканчивался на \n, добавляем его
+        if (text.endsWith("\n") || text.endsWith("\r\n") || text.endsWith("\r")) {
+            result.append("\n")
+        }
 
         return result.toString()
     }
