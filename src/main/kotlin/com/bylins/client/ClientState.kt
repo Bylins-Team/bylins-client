@@ -479,6 +479,11 @@ class ClientState {
     // Ref-counted MSDP subscriptions: variable -> set of subscriber IDs
     private val msdpSubscribers = mutableMapOf<String, MutableSet<String>>()
 
+    // Подписчик ядра на ROOM: им пользуется карта, и живёт он столько же, сколько соединение.
+    private val MAP_MSDP_VARIABLE = "ROOM"
+    private val MAP_SUBSCRIBER_ID = "core-map"
+
+
     // GMCP данные (Generic MUD Communication Protocol)
     private val _gmcpData = MutableStateFlow<Map<String, kotlinx.serialization.json.JsonElement>>(emptyMap())
     val gmcpData: StateFlow<Map<String, kotlinx.serialization.json.JsonElement>> = _gmcpData
@@ -1071,6 +1076,22 @@ class ClientState {
         _msdpEnabled.value = enabled
         if (enabled && !wasEnabled) {
             logger.info { "MSDP protocol enabled" }
+
+            // Карту строит ядро (handleMsdpRoom), но подписаться на ROOM было некому:
+            // единственный список переменных для подписки жил в плагине-ассистенте.
+            // Без плагина сервер ROOM не присылал вовсе, и карта оставалась пустой
+            // при любых настройках вкладки.
+            subscribeMsdpVariable(MAP_MSDP_VARIABLE, MAP_SUBSCRIBER_ID)
+
+            // При обрыве связи подписки сбрасываются, а сервер о прежних REPORT не помнит.
+            // Поэтому на новом соединении их надо разослать заново, иначе после
+            // переподключения переменные молча перестают приходить.
+            for (variableName in msdpSubscribers.keys.toList()) {
+                if (variableName != MAP_MSDP_VARIABLE) {
+                    sendMsdpReport(variableName)
+                }
+            }
+
             // Уведомляем скрипты о включении MSDP
             if (::scriptManager.isInitialized) {
                 scriptManager.fireEvent(com.bylins.client.scripting.ScriptEvent.ON_MSDP_ENABLED)
