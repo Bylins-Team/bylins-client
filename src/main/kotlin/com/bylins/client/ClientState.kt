@@ -852,6 +852,9 @@ class ClientState {
                         "Ошибка подключения: ${e.message ?: "неизвестная ошибка"}"
                 }
                 _errorMessage.value = userFriendlyError
+                // И в само окно: всплывающее сообщение легко пропустить, а в выводе
+                // остаётся след -- видно, куда шли и почему не вышло.
+                telnetClient.addToOutputRaw("\u001B[1;31m[$userFriendlyError]\u001B[0m\n")
             }
         }
     }
