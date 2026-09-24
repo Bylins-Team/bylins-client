@@ -129,11 +129,10 @@ fun InputPanel(
                     .fillMaxWidth()
                     .focusRequester(focusRequester)
                     .onPreviewKeyEvent { event ->
-                        // Ctrl+C/V/X/A в русской раскладке: на macOS и X11 Compose
-                        // видит «с», а не C, и своё копирование не запускает. Если
-                        // физическая клавиша — латинская, а код события — нет,
-                        // делаем то же руками; на Windows коды совпадают, и эта
-                        // ветка не срабатывает
+                        // Ctrl+C/V/X/A в русской раскладке: Compose видит «с», а не
+                        // C, и своё копирование не запускает. Если физическая
+                        // клавиша — латинская, а код события — нет, делаем то же
+                        // руками; где коды совпадают, ветка не срабатывает
                         val physical = com.bylins.client.hotkeys.PhysicalKey.of(event)
                         val isCommand = com.bylins.client.ui.CommandModifier.isPressed(event.isCtrlPressed, event.isMetaPressed)
                         val layoutFallback = event.type == KeyEventType.KeyDown && isCommand && physical != event.key &&

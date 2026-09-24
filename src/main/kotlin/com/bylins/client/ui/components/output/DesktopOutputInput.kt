@@ -348,11 +348,17 @@ fun ScrollbackOutputView(
                     event.key == Key.Escape && holder.searchActive -> { closeSearch(); true }
                     // Клавиша — физическая: в русской раскладке Ctrl+C приходит
                     // как «с», и копирование не срабатывало
-                    isCommand(event) && com.bylins.client.hotkeys.PhysicalKey.of(event) == Key.A -> {
+                    com.bylins.client.ui.OutputClipboardShortcut.isSelectAll(
+                        key = com.bylins.client.hotkeys.PhysicalKey.of(event),
+                        isCommandPressed = isCommand(event)
+                    ) -> {
                         selection.selectAll(geometry.firstSeq, geometry.lineCount); holder.bumpSelection(); true
                     }
-                    isCommand(event) && com.bylins.client.hotkeys.PhysicalKey.of(event) == Key.C -> { copySelection(); true }
-                    event.isCtrlPressed && com.bylins.client.hotkeys.PhysicalKey.of(event) == Key.Insert -> { copySelection(); true }
+                    com.bylins.client.ui.OutputClipboardShortcut.isCopy(
+                        key = com.bylins.client.hotkeys.PhysicalKey.of(event),
+                        isCommandPressed = isCommand(event),
+                        isCtrlPressed = event.isCtrlPressed
+                    ) -> { copySelection(); true }
                     event.key == Key.PageDown -> { userScrollTo(scrollbackPx + topPaneHeightPx); true }
                     event.key == Key.PageUp -> { userScrollTo(scrollbackPx - topPaneHeightPx); true }
                     event.key == Key.DirectionDown -> { userScrollTo(scrollbackPx + lineHeightPx); true }
