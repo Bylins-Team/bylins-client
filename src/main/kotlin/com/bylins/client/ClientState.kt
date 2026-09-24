@@ -380,6 +380,24 @@ class ClientState {
         saveConfig()
     }
 
+    /**
+     * Сколько вывода держать в памяти, МБ.
+     *
+     * Примерно 15 тысяч строк на мегабайт. Больше история — дороже каждое
+     * обновление: пока работа на приход текста пропорциональна всему буферу,
+     * настройка прямо умножает задержку. Видно это в `#perf`.
+     */
+    private val _outputBufferMb = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_BUFFER_MB)
+    val outputBufferMb: StateFlow<Int> = _outputBufferMb
+
+    fun setOutputBufferMb(megabytes: Int) {
+        val value = megabytes.coerceIn(1, com.bylins.client.config.MAX_OUTPUT_BUFFER_MB)
+        if (_outputBufferMb.value == value) return
+        _outputBufferMb.value = value
+        telnetClient.setOutputBufferMb(value)
+        saveConfig()
+    }
+
     private val _sidePanelCollapsed = MutableStateFlow(false)
     val sidePanelCollapsed: StateFlow<Boolean> = _sidePanelCollapsed
     fun setSidePanelCollapsed(collapsed: Boolean) {
@@ -653,6 +671,8 @@ class ClientState {
         val configData = configManager.loadConfig()
         _pluginPermissions.value = configData.pluginPermissions
         _configBackups.value = configData.configBackups
+        _outputBufferMb.value = configData.outputBufferMb
+        telnetClient.setOutputBufferMb(configData.outputBufferMb)
 
         // Инициализируем скриптинг
         initializeScripting()
@@ -1883,6 +1903,7 @@ class ClientState {
             statusGroupCollapsed = _statusGroupCollapsed.value,
             sidePanelCollapsed = _sidePanelCollapsed.value,
             configBackups = _configBackups.value,
+            outputBufferMb = _outputBufferMb.value,
             pluginPermissions = _pluginPermissions.value,
             outputSplitFractions = getOutputSplitFractions()
         )

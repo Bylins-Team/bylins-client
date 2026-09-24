@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.sp
 import com.bylins.client.ClientState
 import com.bylins.client.OperatingSystem
 import com.bylins.client.config.MAX_CONFIG_BACKUPS
+import com.bylins.client.config.MAX_OUTPUT_BUFFER_MB
 import com.bylins.client.PERMANENT_TAB_IDS
 import com.bylins.client.ui.theme.LocalAppColorScheme
 import com.bylins.client.ui.ALL_TABS
@@ -206,6 +207,52 @@ fun SettingsPanel(
                         text = "Сохранять цвета (ANSI-коды)",
                         color = colorScheme.onSurface,
                         fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+
+                Divider(color = colorScheme.divider, modifier = Modifier.padding(vertical = 8.dp))
+
+                // Глубина истории вывода. Платится задержкой: пока работа на
+                // каждый приход текста пропорциональна всему буферу, большой
+                // буфер прямо умножает паузу. Что именно дорого — видно в #perf
+                val outputBufferMb by clientState.outputBufferMb.collectAsState()
+                var bufferText by remember(outputBufferMb) { mutableStateOf(outputBufferMb.toString()) }
+
+                Text(
+                    text = "Буфер вывода",
+                    color = colorScheme.onSurface,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = bufferText,
+                        onValueChange = { value ->
+                            bufferText = value.filter { it.isDigit() }.take(2)
+                            bufferText.toIntOrNull()?.let { clientState.setOutputBufferMb(it) }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.width(90.dp),
+                        textStyle = LocalTextStyle.current.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
+                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                            textColor = colorScheme.onSurface,
+                            backgroundColor = colorScheme.background,
+                            cursorColor = colorScheme.onSurface,
+                            focusedBorderColor = colorScheme.primary,
+                            unfocusedBorderColor = colorScheme.border
+                        )
+                    )
+                    Text(
+                        text = "МБ истории — это примерно ${outputBufferMb * 15} тысяч строк " +
+                            "(максимум $MAX_OUTPUT_BUFFER_MB). Чем больше, тем дороже каждое " +
+                            "обновление вывода: смотрите #perf",
+                        color = colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(start = 8.dp)
                     )

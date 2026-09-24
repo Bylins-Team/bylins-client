@@ -61,9 +61,17 @@ class TelnetClient(
         logger.info { "Encoding changed to: $encoding" }
     }
 
-    // Ограничение на размер буфера вывода (1 МБ)
-    // Уменьшено для экономии памяти - вкладки хранят свою историю отдельно
-    private val MAX_BUFFER_SIZE = 1024 * 1024 // 1 MB
+    // Сколько вывода держать в памяти. Настраивается: история нужна, но
+    // пока работа на каждый приход текста пропорциональна всему буферу,
+    // большой буфер прямо умножает задержку — см. замеры Perf
+    @Volatile
+    private var MAX_BUFFER_SIZE = com.bylins.client.config.DEFAULT_OUTPUT_BUFFER_MB * 1024 * 1024
+
+    fun setOutputBufferMb(megabytes: Int) {
+        val mb = megabytes.coerceIn(1, com.bylins.client.config.MAX_OUTPUT_BUFFER_MB)
+        MAX_BUFFER_SIZE = mb * 1024 * 1024
+        logger.info { "Буфер вывода: $mb МБ" }
+    }
 
     suspend fun connect(host: String, port: Int) = withContext(Dispatchers.IO) {
         try {
