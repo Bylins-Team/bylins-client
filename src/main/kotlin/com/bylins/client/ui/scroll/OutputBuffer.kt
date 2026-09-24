@@ -13,6 +13,22 @@ data class BufferGeometry(val firstSeq: Long, val lineCount: Int) {
 }
 
 /**
+ * Неизменяемый кусок буфера: подряд идущие строки с номера [firstSeq].
+ *
+ * Все куски снимка, кроме последнего, ровно по [SIZE] строк — так строка по
+ * индексу находится делением. Кусок, однажды закрытый, больше не меняется
+ * и во всех следующих снимках остаётся тем же объектом: кто сверяет снимки
+ * (разбор, разметка), пропускает его целиком, а не построчно.
+ */
+class LineChunk(val firstSeq: Long, val lines: Array<String>) {
+    val size: Int get() = lines.size
+
+    companion object {
+        const val SIZE = 256
+    }
+}
+
+/**
  * Неизменяемый снимок буфера вывода: строки как есть (с ANSI), по порядку.
  *
  * seq не обязан совпадать с «номером строки сервера» — это монотонный счётчик,
@@ -20,29 +36,53 @@ data class BufferGeometry(val firstSeq: Long, val lineCount: Int) {
  * сверху. Позволяет заякорить позицию скролла и выделение на конкретной
  * строке и переживать вытеснение.
  *
- * Строки — те же объекты, что лежат в буфере: пока строка не менялась, в
- * следующем снимке под тем же номером будет тот же объект. На этом держится
- * вся цена обновления: разбор, разметка и поиск сверяют строки по ссылке и
- * переделывают только изменившиеся.
+ * Снимок — список кусков ([chunks]) и сколько строк первого куска уже
+ * вытеснено ([offset]): вытеснение не переписывает кусок, а сдвигает
+ * начало. Неизменённая строка в следующем снимке — тот же объект, а
+ * закрытый кусок — тот же кусок; на этом держится вся цена обновления.
  *
  * Последняя строка — незавершённая (промпт), к ней дописывается приходящий
  * текст. Текст с завершающим переводом строки заканчивается пустой строкой.
  */
-class LineSnapshot(val firstSeq: Long, val lines: List<String>) {
-    val lineCount: Int get() = lines.size
-    val isEmpty: Boolean get() = lines.isEmpty()
-    val lastSeq: Long get() = firstSeq + lines.size - 1
-    val geometry: BufferGeometry get() = BufferGeometry(firstSeq, lines.size)
+class LineSnapshot(val firstSeq: Long, val chunks: List<LineChunk>, val offset: Int) {
+
+    constructor(firstSeq: Long, lines: List<String>) : this(firstSeq, chunk(firstSeq, lines), 0)
+
+    val lineCount: Int = chunks.sumOf { it.size } - offset
+    val isEmpty: Boolean get() = lineCount == 0
+    val lastSeq: Long get() = firstSeq + lineCount - 1
+    val geometry: BufferGeometry get() = BufferGeometry(firstSeq, lineCount)
+
+    /** Строки по порядку — вид поверх кусков, без копии. */
+    val lines: List<String> = object : AbstractList<String>() {
+        override val size: Int get() = lineCount
+        override fun get(index: Int): String {
+            val position = offset + index
+            return chunks[position / LineChunk.SIZE].lines[position % LineChunk.SIZE]
+        }
+    }
 
     /** Весь текст буфера одной строкой — для журнала и тестов, не для показа. */
     fun text(): String = lines.joinToString("\n")
 
     companion object {
-        val EMPTY = LineSnapshot(0L, emptyList())
+        val EMPTY = LineSnapshot(0L, emptyList(), 0)
 
         /** Снимок из готового текста: как если бы его дописали в пустой буфер. */
         fun of(text: String, firstSeq: Long = 0L): LineSnapshot =
             if (text.isEmpty()) LineSnapshot(firstSeq, emptyList()) else LineSnapshot(firstSeq, text.split('\n'))
+
+        private fun chunk(firstSeq: Long, lines: List<String>): List<LineChunk> {
+            if (lines.isEmpty()) return emptyList()
+            val chunks = ArrayList<LineChunk>((lines.size + LineChunk.SIZE - 1) / LineChunk.SIZE)
+            var from = 0
+            while (from < lines.size) {
+                val to = minOf(from + LineChunk.SIZE, lines.size)
+                chunks.add(LineChunk(firstSeq + from, Array(to - from) { lines[from + it] }))
+                from = to
+            }
+            return chunks
+        }
     }
 }
 
@@ -52,8 +92,12 @@ class LineSnapshot(val firstSeq: Long, val lines: List<String>) {
  * Раньше буфер был одной строкой: каждое добавление копировало её целиком,
  * а каждое обновление панели пересчитывало по ней строки — при десяти
  * мегабайтах это 5–9 мс на каждый приход текста и столько же сверху (#19).
- * Здесь добавление трогает только последнюю строку и хвост списка, снимок
- * — копия ссылок, вытеснение — сдвиг номера первой строки.
+ * Здесь добавление трогает только открытый хвост, снимок — копия ссылок на
+ * куски и на хвост (сотни, не сотни тысяч), вытеснение — сдвиг начала.
+ *
+ * Куски по [LineChunk.SIZE] строк: заполнился хвост — закрывается куском и
+ * больше не меняется. Вставка перед промптом и дописывание к нему трогают
+ * только открытый хвост.
  *
  * Не потокобезопасен: владелец держит свой замок.
  *
@@ -61,17 +105,21 @@ class LineSnapshot(val firstSeq: Long, val lines: List<String>) {
  */
 class LineBuffer(@Volatile var maxLines: Int) {
 
-    private val lines = ArrayDeque<String>()
+    private val closed = ArrayDeque<LineChunk>()
+    // Сколько строк первого закрытого куска уже вытеснено
+    private var offset = 0
+    // Открытый хвост; его последняя строка — незавершённая
+    private val open = ArrayList<String>()
 
     /** Абсолютный номер первой строки: растёт при вытеснении и очистке. */
     var firstSeq: Long = 0L
         private set
 
-    val lineCount: Int get() = lines.size
-    val isEmpty: Boolean get() = lines.isEmpty()
+    val lineCount: Int get() = closed.size * LineChunk.SIZE - offset + open.size
+    val isEmpty: Boolean get() = lineCount == 0
 
     /** Последняя, незавершённая строка; null, если буфер пуст. */
-    val lastLine: String? get() = lines.lastOrNull()
+    val lastLine: String? get() = open.lastOrNull()
 
     /**
      * Дописывает пришедший текст: кусок до первого перевода строки — к
@@ -86,10 +134,10 @@ class LineBuffer(@Volatile var maxLines: Int) {
             val newline = text.indexOf('\n', start)
             val end = if (newline == -1) text.length else newline
             val piece = text.substring(start, end)
-            if (first && lines.isNotEmpty()) {
-                if (piece.isNotEmpty()) lines[lines.size - 1] = lines.last() + piece
+            if (first && open.isNotEmpty()) {
+                if (piece.isNotEmpty()) open[open.size - 1] = open.last() + piece
             } else {
-                lines.addLast(piece)
+                push(piece)
             }
             first = false
             if (newline == -1) break
@@ -100,7 +148,7 @@ class LineBuffer(@Volatile var maxLines: Int) {
 
     /** Добавляет завершённую строку целиком (вкладки собирают вывод строками). */
     fun addLine(line: String) {
-        lines.addLast(line)
+        push(line)
         trim()
     }
 
@@ -110,29 +158,54 @@ class LineBuffer(@Volatile var maxLines: Int) {
      * нет, просто добавляет.
      */
     fun insertBeforeIncomplete(text: String) {
-        val incomplete = lines.lastOrNull()
+        val incomplete = open.lastOrNull()
         if (incomplete.isNullOrEmpty()) {
             append(text + "\n")
             return
         }
-        lines.removeLast()
-        for (piece in text.split('\n')) lines.addLast(piece)
-        lines.addLast(incomplete)
+        open.removeAt(open.size - 1)
+        for (piece in text.split('\n')) push(piece)
+        push(incomplete)
         trim()
     }
 
     /** Очищает буфер; очищенные строки считаются вытесненными — номера монотонны. */
     fun clear() {
-        firstSeq += lines.size
-        lines.clear()
+        firstSeq += lineCount
+        closed.clear()
+        offset = 0
+        open.clear()
     }
 
-    fun snapshot(): LineSnapshot = LineSnapshot(firstSeq, ArrayList(lines))
+    fun snapshot(): LineSnapshot {
+        val chunks = ArrayList<LineChunk>(closed.size + 1)
+        chunks.addAll(closed)
+        if (open.isNotEmpty()) chunks.add(LineChunk(openFirstSeq(), open.toTypedArray()))
+        return LineSnapshot(firstSeq, chunks, offset)
+    }
+
+    private fun openFirstSeq(): Long = firstSeq + closed.size * LineChunk.SIZE - offset
+
+    private fun push(line: String) {
+        if (open.size == LineChunk.SIZE) {
+            closed.addLast(LineChunk(openFirstSeq(), open.toTypedArray()))
+            open.clear()
+        }
+        open.add(line)
+    }
 
     private fun trim() {
         val limit = maxLines.coerceAtLeast(1)
-        while (lines.size > limit) {
-            lines.removeFirst()
+        while (lineCount > limit) {
+            if (closed.isEmpty()) {
+                open.removeAt(0)
+            } else {
+                offset++
+                if (offset == LineChunk.SIZE) {
+                    closed.removeFirst()
+                    offset = 0
+                }
+            }
             firstSeq++
         }
     }

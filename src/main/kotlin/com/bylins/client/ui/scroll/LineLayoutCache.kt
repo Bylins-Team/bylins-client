@@ -70,7 +70,8 @@ class MeasuredWindow<L>(
  * обновление, — стоило 26–32 мс при трёх размеченных строках (#19).
  *
  * Здесь всё лежит в массивах, выровненных по номеру строки: сдвиг окна —
- * сдвиг массивов. Разметка есть только у строк в затребованных областях —
+ * сдвиг массивов, а сверка «что изменилось» идёт по кускам разобранного
+ * окна: тот же кусок — те же строки. Разметка есть только у строк в затребованных областях —
  * около якоря прокрутки и у хвоста; вышла строка из области — разметка
  * отпускается, а её точная высота остаётся. Строки, которых не размечали
  * никогда, стоят в стопке по оценке высоты: она уточняется, когда строка
@@ -90,6 +91,8 @@ class LineLayoutCache<L> {
     private var layouts: Array<Any?> = arrayOfNulls(0)
     private var key: Any? = null
     private var previousRanges: List<IntRange> = emptyList()
+    // Куски прошлого окна по номеру первой строки: тот же кусок — те же строки
+    private var knownChunks: HashMap<Long, ParsedChunk> = HashMap()
 
     /** Сколько строк размечено за всё время — для тестов и отчётов. */
     var measuredTotal: Long = 0L
@@ -120,16 +123,28 @@ class LineLayoutCache<L> {
             realign(parsed.firstSeq, n)
         }
 
-        // Строка сменилась под своим номером — её высота и разметка негодны
-        for (i in 0 until n) {
-            val annotated = parsed.lines[i].annotated
-            if (refs[i] !== annotated) {
-                refs[i] = annotated
-                heights[i] = estimate(parsed.lines[i])
-                exact[i] = false
-                layouts[i] = null
+        // Строка сменилась под своим номером — её высота и разметка негодны.
+        // Кусок, оставшийся тем же объектом, не сменил ни одной строки — он
+        // пропускается целиком: построчная сверка по всему буферу стоила
+        // 1–2 мс на ста тысячах строк промахами по памяти
+        val previousChunks = knownChunks
+        val freshChunks = HashMap<Long, ParsedChunk>(parsed.chunks.size * 2)
+        for (chunk in parsed.chunks) {
+            freshChunks[chunk.firstSeq] = chunk
+            if (previousChunks[chunk.firstSeq] === chunk) continue
+            for (j in chunk.lines.indices) {
+                val i = (chunk.firstSeq + j - parsed.firstSeq).toInt()
+                if (i < 0 || i >= n) continue
+                val line = chunk.lines[j]
+                if (refs[i] !== line.annotated) {
+                    refs[i] = line.annotated
+                    heights[i] = estimate(line)
+                    exact[i] = false
+                    layouts[i] = null
+                }
             }
         }
+        knownChunks = freshChunks
 
         val ranges = wanted.mapNotNull { r ->
             val from = r.first.coerceAtLeast(0)
@@ -202,6 +217,7 @@ class LineLayoutCache<L> {
         exact = BooleanArray(n)
         layouts = arrayOfNulls(n)
         previousRanges = emptyList()
+        knownChunks = HashMap()
     }
 
     /** Сдвигает массивы под новое окно; что было под тем же номером — остаётся. */
