@@ -27,12 +27,41 @@ fun InputPanel(
     modifier: Modifier = Modifier
 ) {
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
-    val commandHistory = remember { mutableListOf<String>() }
+    // История общая на клиент и переживает перезапуск -- лежит в ~/.bylins-client/history.txt
+    val commandHistory = clientState.commandHistory
     var historyIndex by remember { mutableStateOf(-1) }
     val isConnected by clientState.isConnected.collectAsState()
 
-    // Максимальное количество команд в истории
-    val MAX_HISTORY_SIZE = 500
+    // Подстановка по Tab: запомненное начало строки и место в списке совпадений.
+    // Пока идёт перебор, начало не меняется, иначе после первой подстановки Tab искал бы
+    // уже по подставленной команде.
+    var completionPrefix by remember { mutableStateOf<String?>(null) }
+    var completionMatches by remember { mutableStateOf<List<String>>(emptyList()) }
+    var completionIndex by remember { mutableStateOf(-1) }
+
+    fun resetCompletion() {
+        completionPrefix = null
+        completionMatches = emptyList()
+        completionIndex = -1
+    }
+
+    fun complete(backwards: Boolean) {
+        if (completionPrefix == null) {
+            val prefix = inputText.text
+            completionPrefix = prefix
+            completionMatches = commandHistory.matches(prefix)
+            completionIndex = -1
+        }
+        val matches = completionMatches
+        if (matches.isEmpty()) return
+        completionIndex = if (backwards) {
+            if (completionIndex <= 0) matches.size - 1 else completionIndex - 1
+        } else {
+            (completionIndex + 1) % matches.size
+        }
+        val command = matches[completionIndex]
+        inputText = TextFieldValue(text = command, selection = TextRange(command.length))
+    }
 
     // Автоматически фокусируемся при первом рендере
     LaunchedEffect(Unit) {
@@ -46,16 +75,14 @@ fun InputPanel(
         // Локальные команды (#vars, #help и т.д.) работают всегда
         // Остальные команды требуют подключения
         if (isLocalCommand || isConnected) {
-            // Добавляем в историю только непустые команды
-            if (text.isNotBlank()) {
+            // Добавляем в историю только непустые команды. Пароль не добавляем: сервер
+            // только что его спросил, а история лежит на диске открытым текстом.
+            val wasPasswordPrompt = clientState.consumePasswordPrompt()
+            if (text.isNotBlank() && !wasPasswordPrompt) {
                 commandHistory.add(text)
-
-                // Ограничиваем размер истории
-                if (commandHistory.size > MAX_HISTORY_SIZE) {
-                    commandHistory.removeAt(0) // Удаляем самую старую команду
-                }
             }
             historyIndex = -1
+            resetCompletion()
             clientState.send(text)
             inputText = TextFieldValue("")
         }
@@ -85,6 +112,8 @@ fun InputPanel(
                 onValueChange = { newValue ->
                     if (!clientState.wasHotkeyRecentlyProcessed()) {
                         inputText = newValue
+                        // Набрали что-то своё -- перебор по Tab начинается заново
+                        resetCompletion()
                     }
                 },
                 textStyle = TextStyle(
@@ -102,10 +131,26 @@ fun InputPanel(
                                 sendCommand()
                                 true
                             }
+                            event.key == Key.Tab && event.type == KeyEventType.KeyDown -> {
+                                // Подстановка из истории: Tab -- следующая (более старая)
+                                // команда с тем же началом, Shift+Tab -- назад.
+                                complete(backwards = event.isShiftPressed)
+                                true
+                            }
+                            event.key == Key.Escape && event.type == KeyEventType.KeyDown
+                                && completionPrefix != null -> {
+                                // Вернуть то, что набрали до перебора
+                                val prefix = completionPrefix ?: ""
+                                inputText = TextFieldValue(prefix, TextRange(prefix.length))
+                                resetCompletion()
+                                true
+                            }
                             event.key == Key.DirectionUp && event.type == KeyEventType.KeyDown -> {
-                                if (commandHistory.isNotEmpty()) {
-                                    historyIndex = (historyIndex + 1).coerceAtMost(commandHistory.size - 1)
-                                    val command = commandHistory[commandHistory.size - 1 - historyIndex]
+                                resetCompletion()
+                                val history = commandHistory.all()
+                                if (history.isNotEmpty()) {
+                                    historyIndex = (historyIndex + 1).coerceAtMost(history.size - 1)
+                                    val command = history[history.size - 1 - historyIndex]
                                     inputText = TextFieldValue(
                                         text = command,
                                         selection = TextRange(command.length)
@@ -114,9 +159,11 @@ fun InputPanel(
                                 true
                             }
                             event.key == Key.DirectionDown && event.type == KeyEventType.KeyDown -> {
-                                if (historyIndex > 0) {
+                                resetCompletion()
+                                val history = commandHistory.all()
+                                if (historyIndex > 0 && history.isNotEmpty()) {
                                     historyIndex--
-                                    val command = commandHistory[commandHistory.size - 1 - historyIndex]
+                                    val command = history[history.size - 1 - historyIndex]
                                     inputText = TextFieldValue(
                                         text = command,
                                         selection = TextRange(command.length)

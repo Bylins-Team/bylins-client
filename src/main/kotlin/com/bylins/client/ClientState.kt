@@ -47,6 +47,27 @@ class ClientState {
     private val sendScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val configManager = ConfigManager()
 
+    /**
+     * История команд: общая на клиент, переживает перезапуск.
+     */
+    val commandHistory = com.bylins.client.history.CommandHistory()
+
+    /**
+     * Последнее, что пришло от сервера, похоже на приглашение ввести пароль.
+     *
+     * Нужно, чтобы не класть пароль в историю на диске: телнетного "не показывай ввод"
+     * сервер не шлёт, так что узнать про пароль можно только по самому приглашению.
+     */
+    @Volatile
+    private var passwordPromptPending = false
+
+    /** Забирает признак "спрашивали пароль" и сбрасывает его. */
+    fun consumePasswordPrompt(): Boolean {
+        val pending = passwordPromptPending
+        passwordPromptPending = false
+        return pending
+    }
+
     // Флаг для предотвращения множественного сохранения при инициализации
     private var isInitializing = true
 
@@ -1433,6 +1454,10 @@ class ClientState {
      * Возвращает модифицированный текст с примененными colorize от триггеров
      */
     fun processIncomingText(text: String): String {
+        if (text.isNotEmpty()) {
+            passwordPromptPending =
+                com.bylins.client.history.CommandHistory.looksLikePasswordPrompt(text)
+        }
         // Логируем весь полученный текст
         if (text.isNotEmpty()) {
             logManager.log(text)
