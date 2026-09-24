@@ -21,6 +21,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -337,21 +338,26 @@ fun MapPanel(
                     .fillMaxSize()
                     .background(colorScheme.background)
                     // Клавиатура работает, когда карта в фокусе — после клика по ней.
-                    // Стрелки — сдвиг, PgUp/PgDn — этаж, +/− — масштаб, Home — к
-                    // игроку, Esc — снова следовать за ним
+                    // Стрелки ходят по комнатам, как компас: обзор переходит по
+                    // выходу С/Ю/З/В; PgUp/PgDn — вверх и вниз. Со сдвигом (Shift)
+                    // стрелки таскают саму карту на клетку. +/− — масштаб,
+                    // Home — к игроку, Esc — снова следовать за ним
                     .focusRequester(mapFocus)
                     .focusable()
                     .onPreviewKeyEvent { event ->
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         val step = roomSpacing
                         val centerRoom = effectiveCenterRoomId?.let { rooms[it] }
+                        fun exitTo(direction: Direction): String? =
+                            centerRoom?.exits?.get(direction)?.targetRoomId?.takeIf { it.isNotEmpty() }
                         fun floor(dz: Int): String? = centerRoom?.exits?.entries
                             ?.firstOrNull { it.key.dz == dz && it.value.targetRoomId.isNotEmpty() }?.value?.targetRoomId
+                        val shift = event.isShiftPressed
                         when (event.key) {
-                            Key.DirectionLeft -> { panBy(step, 0f); true }
-                            Key.DirectionRight -> { panBy(-step, 0f); true }
-                            Key.DirectionUp -> { panBy(0f, step); true }
-                            Key.DirectionDown -> { panBy(0f, -step); true }
+                            Key.DirectionLeft -> { if (shift) panBy(step, 0f) else exitTo(Direction.WEST)?.let(lookAt); true }
+                            Key.DirectionRight -> { if (shift) panBy(-step, 0f) else exitTo(Direction.EAST)?.let(lookAt); true }
+                            Key.DirectionUp -> { if (shift) panBy(0f, step) else exitTo(Direction.NORTH)?.let(lookAt); true }
+                            Key.DirectionDown -> { if (shift) panBy(0f, -step) else exitTo(Direction.SOUTH)?.let(lookAt); true }
                             Key.PageUp -> { floor(1)?.let(lookAt); true }
                             Key.PageDown -> { floor(-1)?.let(lookAt); true }
                             Key.Plus, Key.Equals, Key.NumPadAdd -> { zoomAt(ZOOM_STEP, null); true }
