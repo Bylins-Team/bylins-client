@@ -368,7 +368,8 @@ data class ClientConfig(
     val miniMapHeight: Int = 300,  // Высота миникарты в статус-панели в dp
     val zonePanelWidth: Int = 220,  // Ширина панели заметок зоны на вкладке Карта в dp
     val theme: String = "DARK",  // Название темы оформления
-    val fontFamily: String = "MONOSPACE",  // Семейство шрифтов для вывода игры
+    val fontFamily: String = "MONOSPACE",  // Семейство шрифтов для вывода игры или имя системного шрифта
+    val allowSystemFonts: Boolean = false, // Показывать ли в настройках шрифты, установленные в системе
     val fontSize: Int = 14,  // Размер шрифта в sp
     val connectionProfiles: List<ConnectionProfileDto> = emptyList(),  // Список профилей подключений
     val currentProfileId: String? = null,  // ID текущего выбранного профиля подключения

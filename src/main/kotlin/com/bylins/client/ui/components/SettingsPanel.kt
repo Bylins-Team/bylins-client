@@ -30,6 +30,9 @@ import com.bylins.client.PERMANENT_TAB_IDS
 import com.bylins.client.ui.theme.LocalAppColorScheme
 import com.bylins.client.ui.ALL_TABS
 import java.awt.Desktop
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.bylins.client.ui.fonts.SystemFonts
 import java.io.File
 
 @OptIn(ExperimentalMaterialApi::class)
@@ -426,12 +429,24 @@ fun SettingsPanel(
         val currentFontSize by clientState.fontSize.collectAsState()
         var fontExpanded by remember { mutableStateOf(false) }
 
-        val fontFamilies = listOf(
-            "MONOSPACE" to Pair("Monospace", FontFamily.Monospace),
-            "SERIF" to Pair("Serif", FontFamily.Serif),
-            "SANS_SERIF" to Pair("Sans Serif", FontFamily.SansSerif),
-            "CURSIVE" to Pair("Cursive", FontFamily.Cursive)
-        )
+        val allowSystemFonts by clientState.allowSystemFonts.collectAsState()
+
+        // Список шрифтов системы считается один раз и не на потоке отрисовки: обход всех
+        // установленных шрифтов занимает заметные доли секунды.
+        val systemFonts by produceState(initialValue = emptyList<String>(), allowSystemFonts) {
+            value = if (allowSystemFonts) {
+                withContext(Dispatchers.IO) { SystemFonts.monospacedFamilies() }
+            } else {
+                emptyList()
+            }
+        }
+
+        val fontFamilies = remember(systemFonts) {
+            val logical = SystemFonts.LOGICAL.map { (id, family) ->
+                id to Pair(SystemFonts.label(id), family)
+            }
+            logical + systemFonts.map { name -> name to Pair(name, SystemFonts.resolve(name)) }
+        }
 
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -450,6 +465,35 @@ fun SettingsPanel(
                 )
 
                 Divider(color = colorScheme.divider, thickness = 1.dp)
+
+                // Системные шрифты в списке
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = allowSystemFonts,
+                        onCheckedChange = { clientState.setAllowSystemFonts(it) },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = colorScheme.success,
+                            uncheckedColor = colorScheme.onSurfaceVariant
+                        )
+                    )
+                    Column(modifier = Modifier.padding(start = 8.dp)) {
+                        Text(
+                            text = "Разрешить системные шрифты",
+                            color = colorScheme.onSurface,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = "в списке появятся моноширинные шрифты, установленные в системе " +
+                                "(Lucida Console, Consolas и прочие). Немоноширинные не предлагаем: " +
+                                "в выводе поедут колонки и карта. Шрифта, которого на машине нет, " +
+                                "клиент не найдёт и возьмёт Monospace",
+                            color = colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
 
                 // Выбор шрифта
                 Row(
