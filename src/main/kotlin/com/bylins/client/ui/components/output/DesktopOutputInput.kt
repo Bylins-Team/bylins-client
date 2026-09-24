@@ -67,6 +67,7 @@ import com.bylins.client.ui.AnsiParser
 import com.bylins.client.ui.CommandModifier
 import com.bylins.client.ui.scroll.BufferGeometry
 import com.bylins.client.ui.scroll.ContentSnapshot
+import com.bylins.client.ui.scroll.LineLayoutCache
 import com.bylins.client.ui.scroll.ScrollTarget
 
 private val SELECTION_COLOR = Color(0x804A90E2)
@@ -122,6 +123,13 @@ fun ScrollbackOutputView(
         }
     }
 
+    // Окно режется на логические строки: разметка теперь у каждой своя, и
+    // размечается заново только та, что изменилась. Смещения начал строк —
+    // для перевода совпадений поиска (они в plain-смещениях) в строки
+    val lineAnnotated = remember(annotated) { splitLines(annotated) }
+    val lineStarts = remember(annotated) { lineStarts(annotated.text) }
+    val layoutCache = remember { LineLayoutCache<androidx.compose.ui.text.TextLayoutResult>() }
+
     // Кадр с новыми данными нарисован: закрывает сквозной замер «байты пришли
     // -> игрок увидел». Ключ — снимок: эффект перезапускается на каждой порции
     LaunchedEffect(snapshot) {
@@ -162,18 +170,24 @@ fun ScrollbackOutputView(
             val fullViewportPx = sizePx.height.toFloat()
             val widthPx = (sizePx.width - scrollbarStripPx).toInt().coerceAtLeast(1)
 
-            val layout = remember(annotated, widthPx, style) {
-                Perf.measure(Perf.Stage.UI_MEASURE, annotated.length.toLong()) {
-                measurer.measure(
-                    text = annotated,
-                    style = style,
-                    softWrap = true,
-                    constraints = Constraints(maxWidth = widthPx)
+            // Размечаются только изменившиеся строки — в норме одна-две.
+            // «Объём» в замере — сколько строк размечено заново
+            val window = remember(lineAnnotated, widthPx, style) {
+                val constraints = Constraints(maxWidth = widthPx)
+                val started = System.nanoTime()
+                val measured = layoutCache.update(
+                    firstSeq = effectiveFirstSeq,
+                    lines = lineAnnotated,
+                    key = widthPx to style,
+                    measure = { line ->
+                        measurer.measure(text = line, style = style, softWrap = true, constraints = constraints)
+                    },
+                    heightOf = { it.size.height.toFloat() }
                 )
-                }
+                Perf.record(Perf.Stage.UI_MEASURE, System.nanoTime() - started, measured.measuredCount.toLong())
+                measured
             }
-            holder.lastLayout = layout
-            val contentHeight = layout.size.height.toFloat()
+            val contentHeight = window.totalHeight
 
             // Всегда две стыкующиеся панели: верх (скроллбэк) + низ (живой хвост).
             // Сумма высот = вьюпорт (разделитель — лишь линия-оверлей, места не занимает).
@@ -191,13 +205,13 @@ fun ScrollbackOutputView(
             // Применяем целевую позицию скроллбэка при ЛЮБОМ изменении контента/вьюпорта.
             // Если следуем за низом — прижимаем к концу; иначе держим заякоренный символ
             // (seq,col) на той же высоте, пересчитывая его точный пиксель в новом layout.
-            LaunchedEffect(snapshot, layout, fullViewportPx, splitFraction) {
+            LaunchedEffect(snapshot, window, fullViewportPx, splitFraction) {
                 if (holder.isSelecting || holder.isScrolling) return@LaunchedEffect
                 if (controller.followMode) {
                     holder.scrollbackScrollPx = maxScroll
                 } else {
                     holder.scrollbackScrollPx =
-                        (anchorToPx(layout, plainText, effectiveFirstSeq, holder.anchorSeq, holder.anchorCol)
+                        (window.anchorToPx(holder.anchorSeq, holder.anchorCol)
                             + holder.anchorOffsetPx).coerceIn(0f, maxScroll)
                 }
             }
@@ -211,8 +225,8 @@ fun ScrollbackOutputView(
             // перерисовываться при каждом изменении выделения без рекомпозиции.
             val selectionPathProvider: () -> androidx.compose.ui.graphics.Path? = {
                 if (isEmpty) null
-                else selection.charRange(effectiveFirstSeq, plainText)
-                    ?.let { r -> layout.getPathForRange(r.first, r.last + 1) }
+                else selection.normalized()
+                    ?.let { (a, b) -> window.pathForRange(a.seq, a.col, b.seq, b.col) }
             }
             val revisionState = holder.selectionRevisionState
             // Провайдер позиции скроллбэка (верхняя панель) — читается в фазе draw
@@ -220,12 +234,12 @@ fun ScrollbackOutputView(
 
             // --- Поиск: подсветка совпадений (в фазе draw) ---
             val searchRevisionState = holder.searchRevisionState
-            fun matchPath(m: com.bylins.client.ui.scroll.SearchMatch): androidx.compose.ui.graphics.Path =
-                layout.getPathForRange(m.start.coerceIn(0, plainText.length), m.end.coerceIn(0, plainText.length))
+            fun matchPath(m: com.bylins.client.ui.scroll.SearchMatch): androidx.compose.ui.graphics.Path? =
+                window.pathForOffsets(lineStarts, m.start.coerceIn(0, plainText.length), m.end.coerceIn(0, plainText.length))
             val searchAllProvider: () -> androidx.compose.ui.graphics.Path? = {
                 val ms = holder.search.matches
                 if (isEmpty || !holder.searchActive || ms.isEmpty()) null
-                else androidx.compose.ui.graphics.Path().apply { ms.forEach { addPath(matchPath(it)) } }
+                else androidx.compose.ui.graphics.Path().apply { ms.forEach { m -> matchPath(m)?.let { addPath(it) } } }
             }
             val searchCurrentProvider: () -> androidx.compose.ui.graphics.Path? = {
                 if (isEmpty || !holder.searchActive) null else holder.search.current?.let { matchPath(it) }
@@ -237,10 +251,10 @@ fun ScrollbackOutputView(
                 // У самого низа защёлкиваем точно в конец (чтобы виды были непрерывны)
                 val atBottom = clamped >= maxScroll - lineHeightPx
                 holder.scrollbackScrollPx = if (atBottom) maxScroll else clamped
-                val (aseq, acol) = pxToAnchor(layout, plainText, effectiveFirstSeq, clamped)
+                val (aseq, acol) = window.pxToAnchor(clamped)
                 holder.anchorSeq = aseq
                 holder.anchorCol = acol
-                holder.anchorOffsetPx = clamped - anchorToPx(layout, plainText, effectiveFirstSeq, aseq, acol)
+                holder.anchorOffsetPx = clamped - window.anchorToPx(aseq, acol)
                 controller.onUserScroll(atBottom, aseq)
             }
             val collapse: () -> Unit = {
@@ -252,14 +266,14 @@ fun ScrollbackOutputView(
             // Прокрутить к текущему совпадению (через якорь, с парой строк контекста сверху)
             val jumpToMatch: () -> Unit = {
                 holder.search.current?.let { m ->
-                    val lineIdx = com.bylins.client.ui.scroll.BufferOffsets.lineIndexOfOffset(plainText, m.start)
+                    val lineIdx = lineIndexOf(lineStarts, m.start)
                     val targetSeq = (effectiveFirstSeq + lineIdx - 2).coerceAtLeast(effectiveFirstSeq)
                     holder.anchorSeq = targetSeq
                     holder.anchorCol = 0
                     holder.anchorOffsetPx = 0f
                     controller.jumpToLine(targetSeq)
                     holder.scrollbackScrollPx =
-                        anchorToPx(layout, plainText, effectiveFirstSeq, targetSeq, 0).coerceIn(0f, maxScroll)
+                        window.anchorToPx(targetSeq, 0).coerceIn(0f, maxScroll)
                 }
             }
             val onSearchQueryChange: (String) -> Unit = { q ->
@@ -288,7 +302,7 @@ fun ScrollbackOutputView(
                 } else {
                     pos.y + scrollbackPx
                 }
-                pointToSelPoint(layout, plainText, effectiveFirstSeq, pos.x, contentY)
+                window.pointToSelPoint(pos.x, contentY)
             }
             val copySelection: () -> Unit = {
                 if (!isEmpty) {
@@ -402,7 +416,7 @@ fun ScrollbackOutputView(
                     // Две стыкующиеся панели: верх (скроллбэк) + низ (живой хвост у конца).
                     Column(Modifier.fillMaxSize()) {
                         OutputCanvas(
-                            layout = layout,
+                            window = window,
                             scrollProvider = scrollbackProvider,
                             selectionColor = SELECTION_COLOR,
                             revisionState = revisionState,
@@ -413,7 +427,7 @@ fun ScrollbackOutputView(
                             modifier = Modifier.fillMaxWidth().weight(1f - splitFraction)
                         )
                         OutputCanvas(
-                            layout = layout,
+                            window = window,
                             scrollProvider = { bottomScrollPx },
                             selectionColor = SELECTION_COLOR,
                             revisionState = revisionState,
@@ -427,7 +441,7 @@ fun ScrollbackOutputView(
                 } else {
                     // Одно окно: скроллбэк внизу непрерывен с хвостом — показываем как единый вид.
                     OutputCanvas(
-                        layout = layout,
+                        window = window,
                         scrollProvider = scrollbackProvider,
                         selectionColor = SELECTION_COLOR,
                         revisionState = revisionState,

@@ -2,7 +2,6 @@ package com.bylins.client.ui.components.output
 
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.text.TextLayoutResult
 import com.bylins.client.ui.scroll.OutputScrollController
 import com.bylins.client.ui.scroll.OutputSearch
 import com.bylins.client.ui.scroll.OutputSelection
@@ -49,10 +48,6 @@ class OutputViewHolder {
     var scrollbackScrollPx: Float
         get() = _scrollbackScrollPx.value
         set(value) { _scrollbackScrollPx.value = value }
-
-    // Последний результат измерения текста активной панели (для маппинга seq<->px).
-    // Обычный var — используется императивно, не должен триггерить рекомпозицию.
-    var lastLayout: TextLayoutResult? = null
 
     // Идёт ли сейчас выделение мышью. Пока true — автоскролл (follow) к низу
     // заморожен, чтобы заякоренное выделение не уезжало за экран при новом тексте.

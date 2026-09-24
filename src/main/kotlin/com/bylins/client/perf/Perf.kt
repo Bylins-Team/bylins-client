@@ -19,8 +19,13 @@ private val logger = KotlinLogging.logger("Perf")
  */
 object Perf {
 
-    /** Дольше этого — строка в лог. Кадр длиннее 50 мс игрок уже замечает. */
-    var slowThresholdMs: Long = 50
+    /**
+     * Дольше этого — строка в лог. Кадр длиннее 50 мс игрок уже замечает.
+     *
+     * Свойством запуска `-Dbylins.perf.slow=<мс>` порог задаётся без
+     * команды в клиенте — для прогонов, где некому её набрать.
+     */
+    var slowThresholdMs: Long = System.getProperty("bylins.perf.slow")?.toLongOrNull()?.takeIf { it > 0 } ?: 50
 
     /** Этапы обработки. Порядок — как в конвейере, им же печатается отчёт. */
     enum class Stage(val title: String) {
