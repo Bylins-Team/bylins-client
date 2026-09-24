@@ -36,10 +36,14 @@ import androidx.compose.ui.unit.dp
 import com.bylins.client.ClientState
 import com.bylins.client.mapper.Direction
 import com.bylins.client.mapper.Room
+import com.bylins.client.mapper.ZoneList
 import com.bylins.client.ui.theme.LocalAppColorScheme
 
 @OptIn(ExperimentalComposeUiApi::class)
 private val logger = KotlinLogging.logger("MapPanel")
+private const val MIN_ZOOM = 0.3f
+private const val MAX_ZOOM = 3f
+
 @Composable
 fun MapPanel(
     clientState: ClientState,
@@ -84,6 +88,9 @@ fun MapPanel(
 
     // Zone panel width (resizable, persisted)
     val zonePanelWidth by clientState.zonePanelWidth.collectAsState()
+    // Панель зон: режим и строка поиска живут, пока открыта вкладка
+    var zoneListMode by remember { mutableStateOf(ZoneListMode.VISIBLE) }
+    var zoneQuery by remember { mutableStateOf("") }
 
     // Автоследование за игроком
     LaunchedEffect(currentRoomId, followPlayer) {
@@ -215,7 +222,7 @@ fun MapPanel(
 
                 // Масштаб
                 Button(
-                    onClick = { zoom = (zoom * 1.2f).coerceAtMost(3f) },
+                    onClick = { zoom = (zoom * 1.2f).coerceAtMost(MAX_ZOOM) },
                     modifier = Modifier.size(32.dp),
                     contentPadding = PaddingValues(0.dp)
                 ) {
@@ -225,7 +232,7 @@ fun MapPanel(
                 Text("${(zoom * 100).toInt()}%", color = Color.White)
 
                 Button(
-                    onClick = { zoom = (zoom / 1.2f).coerceAtLeast(0.3f) },
+                    onClick = { zoom = (zoom / 1.2f).coerceAtLeast(MIN_ZOOM) },
                     modifier = Modifier.size(32.dp),
                     contentPadding = PaddingValues(0.dp)
                 ) {
@@ -377,9 +384,9 @@ fun MapPanel(
                     .onPointerEvent(PointerEventType.Scroll) { event ->
                         val delta = event.changes.first().scrollDelta.y
                         zoom = if (delta < 0) {
-                            (zoom * 1.15f).coerceAtMost(3f)
+                            (zoom * 1.15f).coerceAtMost(MAX_ZOOM)
                         } else {
-                            (zoom / 1.15f).coerceAtLeast(0.3f)
+                            (zoom / 1.15f).coerceAtLeast(MIN_ZOOM)
                         }
                     }
             ) {
@@ -537,8 +544,8 @@ fun MapPanel(
             }
             } // End of Box
 
-            // Панель зоны справа с ручкой для ресайза
-            if (currentZoneId.isNotEmpty()) {
+            // Панель зон справа с ручкой для ресайза
+            if (rooms.isNotEmpty()) {
                 // Ручка для изменения ширины (между картой и панелью)
                 Box(
                     modifier = Modifier
@@ -556,9 +563,48 @@ fun MapPanel(
                         }
                 )
 
-                ZonePanel(
-                    zoneName = currentZoneName,
-                    zoneNotes = currentZoneNotes,
+                val visibleZones = remember(displayRooms, zoneNamesMap) {
+                    ZoneList.visible(displayRooms.values.map { it.room }, zoneNamesMap)
+                }
+                val allZones = remember(rooms, zoneNamesMap, zoneQuery) {
+                    ZoneList.all(rooms.values, zoneNamesMap, zoneQuery)
+                }
+                val playerZoneId = currentRoomId?.let { rooms[it]?.zone }
+
+                ZonesPanel(
+                    mode = zoneListMode,
+                    onModeChange = { zoneListMode = it },
+                    query = zoneQuery,
+                    onQueryChange = { zoneQuery = it },
+                    visibleZones = visibleZones,
+                    allZones = allZones,
+                    playerZoneId = playerZoneId,
+                    viewZoneId = currentZoneId.takeIf { it.isNotEmpty() },
+                    viewZoneTitle = currentZoneName,
+                    viewZoneNotes = currentZoneNotes,
+                    onSelectZone = { zoneId ->
+                        // Из отрисованных комнат зоны — ближайшая к центру обзора,
+                        // чтобы карта не прыгала; зоны нет на экране — её комната
+                        // входа, BFS пойдёт от неё и связность не нужна
+                        val shown = displayRooms.values.filter { it.room.zone == zoneId }
+                        val target = shown.minByOrNull { kotlin.math.abs(it.gridX) + kotlin.math.abs(it.gridY) }?.room?.id
+                            ?: ZoneList.entryRoom(zoneId, rooms.values)
+                        if (target != null) {
+                            followPlayer = false
+                            viewCenterRoomId = target
+                            offsetX = 0f
+                            offsetY = 0f
+                            if (shown.isNotEmpty()) {
+                                val width = shown.maxOf { it.gridX } - shown.minOf { it.gridX }
+                                val height = shown.maxOf { it.gridY } - shown.minOf { it.gridY }
+                                zoom = ZoneList.zoomToFit(
+                                    gridWidth = width, gridHeight = height,
+                                    canvasWidth = canvasSize.first, canvasHeight = canvasSize.second,
+                                    baseSpacing = baseRoomSpacing, min = MIN_ZOOM, max = MAX_ZOOM
+                                )
+                            }
+                        }
+                    },
                     onNotesChanged = { newNotes ->
                         clientState.setZoneNotes(currentZoneId, newNotes)
                     },
@@ -892,113 +938,6 @@ private fun GoToRoomDialog(
                     TextButton(onClick = onDismiss) {
                         Text("Закрыть", color = Color.White)
                     }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Панель заметок зоны
- */
-@Composable
-private fun ZonePanel(
-    zoneName: String,
-    zoneNotes: String,
-    onNotesChanged: (String) -> Unit,
-    onFocusChanged: (Boolean) -> Unit,
-    width: Dp = 220.dp,
-    modifier: Modifier = Modifier
-) {
-    val colorScheme = LocalAppColorScheme.current
-    var notes by remember(zoneName) { mutableStateOf(zoneNotes) }
-
-    // Обновляем локальное состояние при изменении внешнего
-    LaunchedEffect(zoneNotes) {
-        notes = zoneNotes
-    }
-
-    // Сбрасываем фокус при размонтировании
-    DisposableEffect(Unit) {
-        onDispose {
-            onFocusChanged(false)
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .width(width)
-            .fillMaxHeight()
-            .background(colorScheme.surface)
-            .padding(8.dp)
-    ) {
-        // Заголовок зоны
-        Text(
-            text = zoneName,
-            style = MaterialTheme.typography.titleSmall,
-            color = colorScheme.onSurface
-        )
-
-        Divider(
-            modifier = Modifier.padding(vertical = 4.dp),
-            color = colorScheme.divider
-        )
-
-        // Поле заметок с дебаунсом для автосохранения
-        OutlinedTextField(
-            value = notes,
-            onValueChange = { newValue ->
-                notes = newValue
-                onNotesChanged(newValue)
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .onFocusChanged { focusState ->
-                    onFocusChanged(focusState.isFocused)
-                },
-            placeholder = {
-                Text(
-                    "Заметки о зоне...\n\nПоддерживается **жирный** и *курсив*",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colorScheme.onSurfaceVariant
-                )
-            },
-            textStyle = MaterialTheme.typography.bodySmall.copy(color = colorScheme.onSurface),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = colorScheme.primary,
-                unfocusedBorderColor = colorScheme.border,
-                cursorColor = colorScheme.primary
-            )
-        )
-
-        // Превью markdown
-        if (notes.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Превью:",
-                style = MaterialTheme.typography.labelSmall,
-                color = colorScheme.onSurfaceVariant
-            )
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 160.dp),
-                color = colorScheme.background,
-                shape = MaterialTheme.shapes.small
-            ) {
-                // Заметки бывают длинными (по зоне — на десяток строк),
-                // поэтому превью прокручивается, а не обрезается молча
-                Box(
-                    modifier = Modifier
-                        .padding(4.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    MarkdownText(
-                        text = notes,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colorScheme.onSurface
-                    )
                 }
             }
         }
