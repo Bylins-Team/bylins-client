@@ -326,9 +326,12 @@ fun ScrollbackOutputView(
             }
             val handleKey: (KeyEvent) -> Boolean = handleKey@{ event ->
                 if (event.type != KeyEventType.KeyDown) return@handleKey false
+                // Буквы сравниваем физической клавишей: штатный код Compose зависит от
+                // раскладки, и на русской Ctrl+C не совпадал с Key.C
+                val physicalKey = com.bylins.client.hotkeys.PhysicalKey.of(event)
                 when {
                     com.bylins.client.ui.OutputSearchShortcut.isOpen(
-                        key = com.bylins.client.hotkeys.PhysicalKey.of(event),
+                        key = physicalKey,
                         isCommandPressed = isCommand(event),
                         isAltPressed = event.isAltPressed,
                         isShiftPressed = event.isShiftPressed
@@ -338,11 +341,14 @@ fun ScrollbackOutputView(
                     event.key == Key.F3 && event.isShiftPressed -> { prevMatch(); true }
                     event.key == Key.F3 -> { nextMatch(); true }
                     event.key == Key.Escape && holder.searchActive -> { closeSearch(); true }
-                    isCommand(event) && event.key == Key.A -> {
+                    com.bylins.client.ui.OutputClipboardShortcut.isSelectAll(physicalKey, isCommand(event)) -> {
                         selection.selectAll(geometry.firstSeq, geometry.lineCount); holder.bumpSelection(); true
                     }
-                    isCommand(event) && event.key == Key.C -> { copySelection(); true }
-                    event.isCtrlPressed && event.key == Key.Insert -> { copySelection(); true }
+                    com.bylins.client.ui.OutputClipboardShortcut.isCopy(
+                        key = physicalKey,
+                        isCommandPressed = isCommand(event),
+                        isCtrlPressed = event.isCtrlPressed
+                    ) -> { copySelection(); true }
                     event.key == Key.PageDown -> { userScrollTo(scrollbackPx + topPaneHeightPx); true }
                     event.key == Key.PageUp -> { userScrollTo(scrollbackPx - topPaneHeightPx); true }
                     event.key == Key.DirectionDown -> { userScrollTo(scrollbackPx + lineHeightPx); true }
