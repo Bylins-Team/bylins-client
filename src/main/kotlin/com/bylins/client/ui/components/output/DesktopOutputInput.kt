@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
@@ -222,21 +223,28 @@ fun ScrollbackOutputView(
             // пока пользователь читает старое, конец лога уезжает вниз
             val maxScrollRef by rememberUpdatedState(maxScroll)
 
-            // Применяем целевую позицию скроллбэка при ЛЮБОМ изменении контента/вьюпорта.
-            // Если следуем за низом — прижимаем к концу; иначе держим заякоренный символ
-            // (seq,col) на той же высоте, пересчитывая его точный пиксель в новом layout.
-            LaunchedEffect(snapshot, window, fullViewportPx, splitFraction) {
-                if (holder.isSelecting || holder.isScrolling) return@LaunchedEffect
-                if (controller.followMode) {
-                    holder.scrollbackScrollPx = maxScroll
-                } else {
-                    holder.scrollbackScrollPx =
-                        (window.anchorToPx(holder.anchorSeq, holder.anchorCol)
-                            + holder.anchorOffsetPx).coerceIn(0f, maxScroll)
-                }
-            }
-
-            val scrollbackPx = holder.scrollbackScrollPx.coerceIn(0f, maxScroll)
+            // Целевая позиция скроллбэка — прямо в композиции, из свежего окна.
+            // Если следуем за низом — конец; иначе заякоренный символ (seq, col)
+            // на той же высоте, его точный пиксель — по новой разметке. Во время
+            // выделения и перетаскивания ползунка позиция заморожена (камень №16).
+            //
+            // Раньше это делал LaunchedEffect — а он выполняется уже ПОСЛЕ кадра.
+            // На тот один кадр maxScroll уже вырос, а позиция ещё старая: панель
+            // считала себя раздвоенной, рисовала разделитель и нижнюю панель, и
+            // следующим кадром схлопывалась — моргание при каждом шаге (#19)
+            //
+            // Позиция держателя читается всегда: её пишет и пользователь (колесо,
+            // ползунок), и панель после этого обязана перекомпоноваться —
+            // раздвоение и области разметки выводятся из позиции
+            val heldPx = holder.scrollbackScrollPx
+            val scrollbackPx = when {
+                holder.isSelecting || holder.isScrolling -> heldPx
+                controller.followMode -> maxScroll
+                else -> window.anchorToPx(holder.anchorSeq, holder.anchorCol) + holder.anchorOffsetPx
+            }.coerceIn(0f, maxScroll)
+            // Держатель узнаёт позицию до отрисовки кадра: SideEffect выполняется
+            // сразу по применении композиции, а фаза draw читает holder
+            SideEffect { holder.scrollbackScrollPx = scrollbackPx }
             // Раздвоение (видимость разделителя) выводим прямо из позиции скролла:
             // скроллбэк не у самого низа ⇒ есть разрыв с живым хвостом.
             val split = !isEmpty && scrollbackPx < maxScroll - lineHeightPx
