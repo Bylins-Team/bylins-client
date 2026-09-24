@@ -1,9 +1,9 @@
 # Что дальше
 
-Клиент выпущен: [релизы](https://github.com/kvirund/bylins-client/releases),
+Клиент выпущен: [релизы](https://github.com/Bylins-Team/bylins-client/releases),
 сборки под Windows, Linux и macOS. Что уже умеет — в [README](README.md).
 
-Живой список задач — [issues](https://github.com/kvirund/bylins-client/issues).
+Живой список задач — [issues](https://github.com/Bylins-Team/bylins-client/issues).
 Здесь только крупное, до чего пока не дошли.
 
 ## Интерфейс

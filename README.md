@@ -5,7 +5,7 @@ Windows, Linux, macOS.
 
 ## Установка
 
-Готовые сборки — в [релизах](https://github.com/kvirund/bylins-client/releases):
+Готовые сборки — в [релизах](https://github.com/Bylins-Team/bylins-client/releases):
 `bylins-client-windows.zip`, `bylins-client-linux.zip`, `bylins-client-macos.zip`.
 
 Распаковать и запустить (`Bylins Client.exe`, `Bylins Client`, `Bylins Client.app`).
