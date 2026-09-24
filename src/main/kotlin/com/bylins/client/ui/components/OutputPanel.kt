@@ -15,7 +15,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -215,9 +214,9 @@ fun OutputPanel(
 
             val placeholder = remember(activeTab.id, activeTab.name) {
                 if (activeTab.id == "main") {
-                    AnnotatedString("Добро пожаловать в Bylins MUD Client!\nПодключитесь к серверу для начала игры.\n\n")
+                    "Добро пожаловать в Bylins MUD Client!\nПодключитесь к серверу для начала игры.\n\n"
                 } else {
-                    AnnotatedString("${activeTab.name}: пусто\n")
+                    "${activeTab.name}: пусто\n"
                 }
             }
 

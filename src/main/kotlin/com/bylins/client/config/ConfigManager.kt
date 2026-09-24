@@ -20,6 +20,17 @@ const val DEFAULT_CONFIG_BACKUPS = 3
 
 /** Верхняя граница: копии дешёвые, но плодить их без счёта незачем. */
 const val MAX_CONFIG_BACKUPS = 20
+
+/**
+ * Сколько строк вывода держать в памяти.
+ *
+ * Столько же доступно прокруткой, поиском и выделением. Всё, что делается на
+ * приход текста, стоит по изменению, а не по истории, так что глубина
+ * платится только памятью: около килобайта на строку.
+ */
+const val DEFAULT_OUTPUT_BUFFER_LINES = 100_000
+const val MIN_OUTPUT_BUFFER_LINES = 1_000
+const val MAX_OUTPUT_BUFFER_LINES = 1_000_000
 class ConfigManager {
     private val json = Json {
         prettyPrint = true
@@ -107,7 +118,8 @@ class ConfigManager {
         outputSplitFractions: Map<String, Float> = emptyMap(),
         sidePanelCollapsed: Boolean = false,
         pluginPermissions: Map<String, Set<String>> = emptyMap(),
-        configBackups: Int = DEFAULT_CONFIG_BACKUPS
+        configBackups: Int = DEFAULT_CONFIG_BACKUPS,
+        outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES
     ) {
         try {
             val config = ClientConfig(
@@ -136,7 +148,8 @@ class ConfigManager {
                 outputSplitFractions = outputSplitFractions,
                 sidePanelCollapsed = sidePanelCollapsed,
                 pluginPermissions = pluginPermissions,
-                configBackups = configBackups
+                configBackups = configBackups,
+                outputBufferLines = outputBufferLines
             )
 
             // Конфиг не читали — значит и состояния ещё нет, писать нечего
@@ -212,6 +225,7 @@ class ConfigManager {
             val sidePanelCollapsed = config.sidePanelCollapsed
             val pluginPermissions = config.pluginPermissions
             val configBackups = config.configBackups
+            val outputBufferLines = config.outputBufferLines
 
             val contextCommandRules = config.contextCommandRules
             val contextCommandMaxQueueSize = config.contextCommandMaxQueueSize
@@ -244,7 +258,8 @@ class ConfigManager {
                 outputSplitFractions = outputSplitFractions,
                 sidePanelCollapsed = sidePanelCollapsed,
                 pluginPermissions = pluginPermissions,
-                configBackups = configBackups
+                configBackups = configBackups,
+                outputBufferLines = outputBufferLines
             )
         } catch (e: Exception) {
             // Не помечаем конфиг загруженным: файл есть, но прочитать не вышло.
@@ -375,5 +390,6 @@ data class ConfigData(
     val outputSplitFractions: Map<String, Float> = emptyMap(),
     val sidePanelCollapsed: Boolean = false,
     val pluginPermissions: Map<String, Set<String>> = emptyMap(),
-    val configBackups: Int = DEFAULT_CONFIG_BACKUPS
+    val configBackups: Int = DEFAULT_CONFIG_BACKUPS,
+    val outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES
 )

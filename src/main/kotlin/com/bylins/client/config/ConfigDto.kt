@@ -383,5 +383,8 @@ data class ClientConfig(
     val pluginPermissions: Map<String, Set<String>> = emptyMap(),  // Выданные плагинам разрешения: id плагина → id разрешений
     // Сколько прошлых версий конфига хранить рядом (config.json.1 и далее).
     // 0 отключает копии; они спасают, когда клиент записал испорченное состояние
-    val configBackups: Int = 3
+    val configBackups: Int = 3,
+    // Сколько строк вывода держать в памяти: столько доступно прокруткой,
+    // поиском и выделением. Работа на приход текста от глубины не зависит
+    val outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES
 )

@@ -102,7 +102,7 @@ class TabManager {
                     timestamps = timestamps
                 )
                 // Копируем старое содержимое
-                val oldContent = tab.content.value
+                val oldContent = tab.contentText()
                 if (oldContent.isNotEmpty()) {
                     newTab.appendText(oldContent)
                 }
@@ -202,9 +202,7 @@ class TabManager {
      */
     fun setActiveTab(id: String) {
         if (_tabs.value.any { it.id == id }) {
-            // Принудительно обновляем содержимое вкладки перед показом
             val tab = getTab(id)
-            tab?.flush()
             // Сбрасываем индикатор непрочитанных
             tab?.markAsRead()
             _activeTabId.value = id
@@ -215,7 +213,10 @@ class TabManager {
      * Обрабатывает входящий текст и распределяет его по вкладкам
      * Возвращает текст, который должен остаться в главной вкладке
      */
-    fun processText(text: String): String {
+    fun processText(text: String): String = com.bylins.client.perf.Perf.measure(
+        com.bylins.client.perf.Perf.Stage.TABS_ROUTE,
+        text.length.toLong()
+    ) {
         // Используем общий ansiParser вместо создания нового
         val lines = text.split("\n")
         val mainLines = mutableListOf<String>()
@@ -258,13 +259,6 @@ class TabManager {
             mainTab.appendText(mainText)
         }
 
-        // Принудительно обновляем UI для всех вкладок
-        mainTab.flush()
-        for (tab in _tabs.value) {
-            if (tab.id != "main") {
-                tab.flush()
-            }
-        }
 
         return mainText
     }
@@ -272,13 +266,12 @@ class TabManager {
     /**
      * Добавляет текст напрямую в главную вкладку (без фильтрации)
      * Используется для системных сообщений от скриптов/плагинов
-     * Примечание: для отображения используется receivedData, это только для сохранения в лог
+     * Примечание: для отображения используется буфер TelnetClient, это только для сохранения в лог
      */
     fun addToMainTab(text: String) {
         if (text.isEmpty()) return
 
         mainTab.appendText(text)
-        mainTab.flush()
     }
 
     /**
@@ -289,7 +282,6 @@ class TabManager {
 
         val isActive = _activeTabId.value == "logs"
         logsTab.appendText(text, markUnread = !isActive)
-        logsTab.flush()
     }
 
     /**
@@ -320,25 +312,22 @@ class TabManager {
 
         // Восстанавливаем содержимое главной вкладки
         if (savedMainTab != null) {
-            val savedContent = savedMainTab.content.value
+            val savedContent = savedMainTab.contentText()
             if (savedContent.isNotEmpty()) {
                 mainTab.appendText(savedContent)
-                mainTab.flush()
             }
         }
 
         // Восстанавливаем содержимое вкладки логов
         if (savedLogsTab != null) {
-            val savedContent = savedLogsTab.content.value
+            val savedContent = savedLogsTab.contentText()
             if (savedContent.isNotEmpty()) {
                 logsTab.appendText(savedContent)
-                logsTab.flush()
             }
         }
 
         // Добавляем welcome message после восстановленного лога
         mainTab.appendText("\nДобро пожаловать в Bylins MUD Client!\nПодключитесь к серверу для начала игры.\n")
-        mainTab.flush()
 
         // Сохраняем: mainTab, пользовательские вкладки, вкладки плагинов, logsTab (в конце)
         // Вкладки плагинов добавляются перед logsTab, чтобы сохранить порядок
@@ -377,7 +366,7 @@ class TabManager {
     fun getPerProfileLogs(): Map<String, String> {
         return _tabs.value
             .filter { !it.isPluginTab && !it.profileTab && it.profileLog && it.persistContent }
-            .associate { it.id to it.content.value }
+            .associate { it.id to it.contentText() }
     }
 
     /**
@@ -391,7 +380,6 @@ class TabManager {
             val content = logs[tab.id]
             if (!content.isNullOrEmpty()) {
                 tab.appendText(content)
-                tab.flush()
             }
         }
     }

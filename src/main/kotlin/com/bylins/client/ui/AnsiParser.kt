@@ -8,12 +8,48 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 
+/**
+ * Состояние раскраски между кусками текста.
+ *
+ * Цвет в ANSI не знает строк: сервер включил зелёный в одной строке, а
+ * выключил через три. Поэтому строка разбирается с состоянием на конце
+ * предыдущей и отдаёт своё — по нему разбирается следующая. Меняется в
+ * норме только последняя строка, и разбирать заново нужно только её.
+ */
+data class AnsiState(
+    val foreground: Color? = null,
+    val background: Color? = null,
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+    val underline: Boolean = false
+) {
+    val isPlain: Boolean
+        get() = foreground == null && background == null && !bold && !italic && !underline
+
+    companion object {
+        val RESET = AnsiState()
+    }
+}
+
+/** Результат разбора одной строки: раскрашенный текст и состояние на её конце. */
+class ParsedAnsi(val annotated: AnnotatedString, val stateOut: AnsiState)
+
 class AnsiParser {
     private val ESC = '\u001B'
     private val TAB_WIDTH = 8 // Стандартная ширина табуляции
 
-    // Кеш для переиспользования SpanStyle объектов (КРИТИЧНО для производительности)
-    private val spanStyleCache = mutableMapOf<String, SpanStyle>()
+    // Кеш для переиспользования SpanStyle объектов (КРИТИЧНО для производительности).
+    // Ключ — само состояние: собирать строку-ключ на каждый отрезок было бы
+    // мусором на каждую строку вывода
+    private val spanStyleCache = HashMap<AnsiState, SpanStyle>()
+
+    // Состояния канонические: одно и то же состояние — один объект. Кэш
+    // разбора сверяет состояние на входе строки со ста тысячами прошлых, и
+    // сверка по ссылке — единственная, которая ничего не стоит: `==` у
+    // data class с `Color?` боксит цвет на каждое сравнение
+    private val stateCache = HashMap<AnsiState, AnsiState>().apply { put(AnsiState.RESET, AnsiState.RESET) }
+
+    private fun canonical(state: AnsiState): AnsiState = stateCache.getOrPut(state) { state }
 
     // ANSI 16 базовых цветов (стандартная VGA/xterm палитра)
     private val ansi16Colors = mapOf(
@@ -89,42 +125,59 @@ class AnsiParser {
         return result.toString()
     }
 
-    fun parse(text: String): AnnotatedString = buildAnnotatedString {
-        val expandedText = expandTabs(text)
-        var currentPos = 0
-        var currentFgColor: Color? = null
-        var currentBgColor: Color? = null
-        var isBold = false
-        var isItalic = false
-        var isUnderline = false
+    /** Разбирает текст целиком, начиная с чистого состояния. */
+    fun parse(text: String): AnnotatedString = parse(text, AnsiState.RESET).annotated
 
-        while (currentPos < expandedText.length) {
-            val escPos = expandedText.indexOf(ESC, currentPos)
+    /**
+     * Разбирает текст, начиная с состояния [stateIn] — раскраски, в которой
+     * закончился предыдущий кусок, — и отдаёт состояние на своём конце.
+     */
+    fun parse(text: String, stateIn: AnsiState): ParsedAnsi {
+        var stateOut = stateIn
+        val annotated = buildAnnotatedString {
+            stateOut = parseInto(this, expandTabs(text), stateIn)
+        }
+        return ParsedAnsi(annotated, stateOut)
+    }
+
+    private fun AnnotatedString.Builder.appendStyled(text: String, start: Int, end: Int, state: AnsiState) {
+        if (end <= start) return
+        // Без раскраски — без отрезка: разметка стоит по отрезкам, не по буквам
+        if (state.isPlain) {
+            append(text, start, end)
+            return
+        }
+        pushStyle(createSpanStyle(state))
+        append(text, start, end)
+        pop()
+    }
+
+    private fun parseInto(builder: AnnotatedString.Builder, text: String, stateIn: AnsiState): AnsiState {
+        var currentPos = 0
+        var fg = stateIn.foreground
+        var bg = stateIn.background
+        var bold = stateIn.bold
+        var italic = stateIn.italic
+        var underline = stateIn.underline
+        var state = stateIn
+
+        while (currentPos < text.length) {
+            val escPos = text.indexOf(ESC, currentPos)
 
             if (escPos == -1) {
                 // Нет больше escape последовательностей - применяем текущий стиль к оставшемуся тексту
-                val remaining = expandedText.substring(currentPos)
-                if (remaining.isNotEmpty()) {
-                    pushStyle(createSpanStyle(currentFgColor, currentBgColor, isBold, isItalic, isUnderline))
-                    append(remaining)
-                    pop()
-                }
+                builder.appendStyled(text, currentPos, text.length, state)
                 break
             }
 
             // Добавляем текст до escape последовательности
-            if (escPos > currentPos) {
-                val span = expandedText.substring(currentPos, escPos)
-                pushStyle(createSpanStyle(currentFgColor, currentBgColor, isBold, isItalic, isUnderline))
-                append(span)
-                pop()
-            }
+            builder.appendStyled(text, currentPos, escPos, state)
 
             // Парсим escape последовательность
-            if (escPos + 1 < expandedText.length && expandedText[escPos + 1] == '[') {
-                val mPos = expandedText.indexOf('m', escPos + 2)
+            if (escPos + 1 < text.length && text[escPos + 1] == '[') {
+                val mPos = text.indexOf('m', escPos + 2)
                 if (mPos != -1) {
-                    val codes = expandedText.substring(escPos + 2, mPos)
+                    val codes = text.substring(escPos + 2, mPos)
                         .split(';')
                         .mapNotNull { it.toIntOrNull() }
 
@@ -134,21 +187,21 @@ class AnsiParser {
                         when (code) {
                             0 -> {
                                 // Reset
-                                currentFgColor = null
-                                currentBgColor = null
-                                isBold = false
-                                isItalic = false
-                                isUnderline = false
+                                fg = null
+                                bg = null
+                                bold = false
+                                italic = false
+                                underline = false
                             }
-                            1 -> isBold = true
-                            3 -> isItalic = true
-                            4 -> isUnderline = true
-                            22 -> isBold = false
-                            23 -> isItalic = false
-                            24 -> isUnderline = false
+                            1 -> bold = true
+                            3 -> italic = true
+                            4 -> underline = true
+                            22 -> bold = false
+                            23 -> italic = false
+                            24 -> underline = false
                             in 30..37, in 90..97 -> {
                                 // Foreground color
-                                currentFgColor = ansi16Colors[code]
+                                fg = ansi16Colors[code]
                             }
                             38 -> {
                                 // Extended foreground color
@@ -157,18 +210,14 @@ class AnsiParser {
                                         5 -> {
                                             // 256 colors
                                             if (i + 2 < codes.size) {
-                                                currentFgColor = get256Color(codes[i + 2])
+                                                fg = get256Color(codes[i + 2])
                                                 i += 2
                                             }
                                         }
                                         2 -> {
                                             // RGB
                                             if (i + 4 < codes.size) {
-                                                currentFgColor = Color(
-                                                    codes[i + 2],
-                                                    codes[i + 3],
-                                                    codes[i + 4]
-                                                )
+                                                fg = Color(codes[i + 2], codes[i + 3], codes[i + 4])
                                                 i += 4
                                             }
                                         }
@@ -177,7 +226,7 @@ class AnsiParser {
                             }
                             in 40..47, in 100..107 -> {
                                 // Background color
-                                currentBgColor = ansi16Colors[code - 10]
+                                bg = ansi16Colors[code - 10]
                             }
                             48 -> {
                                 // Extended background color
@@ -186,18 +235,14 @@ class AnsiParser {
                                         5 -> {
                                             // 256 colors
                                             if (i + 2 < codes.size) {
-                                                currentBgColor = get256Color(codes[i + 2])
+                                                bg = get256Color(codes[i + 2])
                                                 i += 2
                                             }
                                         }
                                         2 -> {
                                             // RGB
                                             if (i + 4 < codes.size) {
-                                                currentBgColor = Color(
-                                                    codes[i + 2],
-                                                    codes[i + 3],
-                                                    codes[i + 4]
-                                                )
+                                                bg = Color(codes[i + 2], codes[i + 3], codes[i + 4])
                                                 i += 4
                                             }
                                         }
@@ -207,6 +252,7 @@ class AnsiParser {
                         }
                         i++
                     }
+                    state = canonical(AnsiState(fg, bg, bold, italic, underline))
 
                     currentPos = mPos + 1
                 } else {
@@ -218,29 +264,19 @@ class AnsiParser {
                 currentPos = escPos + 1
             }
         }
+        return state
     }
 
-    private fun createSpanStyle(
-        fgColor: Color?,
-        bgColor: Color?,
-        bold: Boolean,
-        italic: Boolean,
-        underline: Boolean
-    ): SpanStyle {
-        // Создаем ключ кеша на основе параметров
-        val cacheKey = "${fgColor?.value ?: "null"}_${bgColor?.value ?: "null"}_${bold}_${italic}_$underline"
-
-        // Проверяем кеш
-        return spanStyleCache.getOrPut(cacheKey) {
+    private fun createSpanStyle(state: AnsiState): SpanStyle =
+        spanStyleCache.getOrPut(state) {
             SpanStyle(
-                color = fgColor ?: Color.Unspecified,
-                background = bgColor ?: Color.Unspecified,
-                fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-                fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
-                textDecoration = if (underline) TextDecoration.Underline else null
+                color = state.foreground ?: Color.Unspecified,
+                background = state.background ?: Color.Unspecified,
+                fontWeight = if (state.bold) FontWeight.Bold else FontWeight.Normal,
+                fontStyle = if (state.italic) FontStyle.Italic else FontStyle.Normal,
+                textDecoration = if (state.underline) TextDecoration.Underline else null
             )
         }
-    }
 
     /**
      * Удаляет все ANSI escape последовательности из текста

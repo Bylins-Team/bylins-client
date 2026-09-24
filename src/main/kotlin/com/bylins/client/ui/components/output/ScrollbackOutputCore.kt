@@ -17,118 +17,144 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.drawText
-import com.bylins.client.ui.scroll.BufferOffsets
+import com.bylins.client.ui.scroll.MeasuredWindow
+import com.bylins.client.ui.scroll.SearchMatch
 import com.bylins.client.ui.scroll.SelPoint
 
 /**
  * Портируемое ядро панели вывода: маппинг между абсолютным seq строки и
- * пиксельной позицией скролла (через TextLayoutResult) и отрисовка.
- * Использует только multiplatform-API Compose (без desktop-специфики).
+ * пиксельной позицией скролла и отрисовка.
+ *
+ * Разметка — по строкам (см. [MeasuredWindow]): у каждой логической строки
+ * свой TextLayoutResult, а её место по вертикали — сумма высот строк выше.
+ * Поэтому любой перевод «пиксель ↔ символ» — это два шага: найти строку по
+ * вертикали или номеру, затем спросить её собственную разметку. Разметка
+ * есть только у строк около вьюпорта; кому нужна другая — размечается на
+ * месте, по одной. Использует только multiplatform-API Compose.
  */
+
+internal typealias TextWindow = MeasuredWindow<TextLayoutResult>
 
 /** Максимальный сдвиг скролла для заданной высоты контента и вьюпорта. */
 internal fun maxScrollOf(contentHeightPx: Float, viewportPx: Float): Float =
     (contentHeightPx - viewportPx).coerceAtLeast(0f)
 
-/** Пиксельная позиция верха логической строки [seq] (для якоря/перехода). */
-internal fun seqToTopPx(
-    layout: TextLayoutResult,
-    plainText: String,
-    firstSeq: Long,
-    seq: Long
-): Float {
-    val lineIndex = (seq - firstSeq).toInt().coerceAtLeast(0)
-    val offset = BufferOffsets.lineStartOffset(plainText, lineIndex)
-        .coerceIn(0, layout.layoutInput.text.length)
-    val visualLine = layout.getLineForOffset(offset)
-    return layout.getLineTop(visualLine)
-}
-
-/** Якорь (seq, col) символа в левом-верхнем углу вьюпорта при сдвиге [scrollPx]. */
-internal fun pxToAnchor(
-    layout: TextLayoutResult,
-    plainText: String,
-    firstSeq: Long,
-    scrollPx: Float
-): Pair<Long, Int> {
-    val off = layout.getOffsetForPosition(Offset(0f, scrollPx)).coerceIn(0, plainText.length)
-    val (line, col) = BufferOffsets.lineColOfOffset(plainText, off)
-    return (firstSeq + line) to col
+/**
+ * Сколько визуальных строк займёт текст в [columns] символов шириной —
+ * оценка высоты строки, которую не размечали.
+ *
+ * Перенос по словам, как у разметки: длинное слово рвётся по ширине.
+ * Для моноширинного шрифта совпадает с разметкой, для пропорционального —
+ * близко; точная высота встаёт, когда строка доезжает до вьюпорта.
+ */
+internal fun estimateVisualLines(text: CharSequence, columns: Int): Int {
+    val width = columns.coerceAtLeast(1)
+    if (text.length <= width) return 1
+    var lines = 1
+    var lineStart = 0
+    var lastSpace = -1
+    var i = 0
+    while (i < text.length) {
+        if (text[i] == ' ') lastSpace = i
+        if (i - lineStart >= width) {
+            // Есть где перенести по слову — переносим там, иначе рвём слово
+            lineStart = if (lastSpace > lineStart) lastSpace + 1 else i
+            lastSpace = -1
+            lines++
+        }
+        i++
+    }
+    return lines
 }
 
 /** Точный пиксель верха визуальной строки, содержащей символ (seq, col). Без «защёлкивания»
  *  к началу логической строки — поэтому нет дрожи на переносах. */
-internal fun anchorToPx(
-    layout: TextLayoutResult,
-    plainText: String,
-    firstSeq: Long,
-    seq: Long,
-    col: Int
-): Float {
-    val lineIdx = (seq - firstSeq).toInt()
-    val li = if (lineIdx < 0) 0 else lineIdx
-    val c = if (lineIdx < 0) 0 else col
-    val off = BufferOffsets.offsetOfLineCol(plainText, li, c).coerceIn(0, layout.layoutInput.text.length)
-    val visualLine = layout.getLineForOffset(off)
-    return layout.getLineTop(visualLine)
+internal fun TextWindow.anchorToPx(seq: Long, col: Int): Float {
+    if (isEmpty) return 0f
+    val index = indexOfSeq(seq)
+    val layout = layoutOrMeasure(index)
+    // Вытесненная строка подтягивается к началу окна, как и в модели выделения
+    val offset = if (seq < firstSeq) 0 else col.coerceIn(0, lengthOf(index))
+    return topOf(index) + layout.getLineTop(layout.getLineForOffset(offset))
 }
 
-/** seq верхней видимой строки при заданном сдвиге скролла. */
-internal fun topSeqAt(
-    layout: TextLayoutResult,
-    plainText: String,
-    firstSeq: Long,
-    scrollPx: Float
-): Long {
-    val visualLine = layout.getLineForVerticalPosition(scrollPx)
-    val offset = layout.getLineStart(visualLine)
-    return firstSeq + BufferOffsets.lineIndexOfOffset(plainText, offset)
+/** Якорь (seq, col) символа в левом-верхнем углу вьюпорта при сдвиге [scrollPx]. */
+internal fun TextWindow.pxToAnchor(scrollPx: Float): Pair<Long, Int> {
+    if (isEmpty) return firstSeq to 0
+    val index = indexAt(scrollPx)
+    val layout = layoutOrMeasure(index)
+    val localY = (scrollPx - topOf(index)).coerceAtLeast(0f)
+    val offset = layout.getOffsetForPosition(Offset(0f, localY)).coerceIn(0, lengthOf(index))
+    return (firstSeq + index) to offset
 }
 
 /** Точка выделения (seq, col) для позиции указателя в координатах контента. */
-internal fun pointToSelPoint(
-    layout: TextLayoutResult,
-    plainText: String,
-    firstSeq: Long,
-    contentX: Float,
-    contentY: Float
-): SelPoint {
-    val offset = layout.getOffsetForPosition(Offset(contentX, contentY))
-        .coerceIn(0, plainText.length)
-    val (line, col) = BufferOffsets.lineColOfOffset(plainText, offset)
-    return SelPoint(firstSeq + line, col)
-}
-
-/** Последние [maxLines] строк текста (оптимизация парсинга больших буферов). */
-internal fun lastLines(text: String, maxLines: Int): String {
-    if (text.isEmpty()) return text
-    var lineCount = 0
-    var position = text.length - 1
-    while (position >= 0 && lineCount < maxLines) {
-        if (text[position] == '\n') lineCount++
-        position--
-    }
-    if (position < 0) return text
-    return text.substring(position + 1)
+internal fun TextWindow.pointToSelPoint(contentX: Float, contentY: Float): SelPoint {
+    if (isEmpty) return SelPoint(firstSeq, 0)
+    val index = indexAt(contentY)
+    val layout = layoutOrMeasure(index)
+    val localY = (contentY - topOf(index)).coerceAtLeast(0f)
+    val offset = layout.getOffsetForPosition(Offset(contentX, localY)).coerceIn(0, lengthOf(index))
+    return SelPoint(firstSeq + index, offset)
 }
 
 /**
- * Рисует одну панель-вьюпорт над общим layout: подсветку выделения и текст,
- * сдвинутые на [scrollPx] и обрезанные границами панели.
+ * Путь подсветки диапазона (seq, col) → (seq, col) — по строкам, каждая
+ * своей разметкой на своей высоте, но только для строк с индексами от
+ * [fromIndex] до [toIndex]: подсвечивать невидимое незачем, а выделение
+ * «всего» на ста тысячах строк размечало бы их все. Столбцы зажимаются
+ * по длине строки, номера — по окну: выделение может начинаться в
+ * вытесненной строке.
+ *
+ * @return null, если подсвечивать нечего
  */
+internal fun TextWindow.pathForRange(
+    startSeq: Long, startCol: Int, endSeq: Long, endCol: Int,
+    fromIndex: Int = 0, toIndex: Int = lineCount - 1
+): Path? {
+    if (isEmpty) return null
+    val from = maxOf(startSeq, firstSeq, firstSeq + fromIndex.coerceAtLeast(0))
+    val to = minOf(endSeq, lastSeq, firstSeq + toIndex.coerceAtMost(lineCount - 1))
+    if (from > to) return null
+    var path: Path? = null
+    for (seq in from..to) {
+        val index = (seq - firstSeq).toInt()
+        val length = lengthOf(index)
+        val s = if (seq == startSeq) startCol.coerceIn(0, length) else 0
+        val e = if (seq == endSeq) endCol.coerceIn(0, length) else length
+        if (e <= s) continue
+        val segment = layoutOrMeasure(index).getPathForRange(s, e)
+        segment.translate(Offset(0f, topOf(index)))
+        (path ?: Path().also { path = it }).addPath(segment)
+    }
+    return path
+}
+
+/** Путь подсветки совпадения поиска; null — вне окна или пустое. */
+internal fun TextWindow.pathForMatch(match: SearchMatch): Path? =
+    pathForRange(match.seq, match.start, match.seq, match.end)
+
 internal val SEARCH_ALL_COLOR = Color(0x66E6B800)     // все совпадения — приглушённый жёлтый
 internal val SEARCH_CURRENT_COLOR = Color(0xCCFF8C00)  // текущее — яркий оранжевый
 
-@androidx.compose.runtime.Composable
+/**
+ * Рисует одну панель-вьюпорт над окном строк: подсветки и текст, сдвинутые
+ * на [scrollPx] и обрезанные границами панели. Рисуются — и подсвечиваются
+ * — только строки, попавшие во вьюпорт: остальные не стоят ничего.
+ *
+ * Выделение и совпадения читаются в фазе draw через провайдеры: панель
+ * перерисовывается по ревизиям без рекомпозиции.
+ */
+@Composable
 internal fun OutputCanvas(
-    layout: TextLayoutResult,
+    window: TextWindow,
     scrollProvider: () -> Float,
     selectionColor: Color,
     revisionState: State<Int>,
     searchRevisionState: State<Int>,
-    selectionPathProvider: () -> Path?,
-    searchAllProvider: () -> Path?,
-    searchCurrentProvider: () -> Path?,
+    selectionProvider: () -> Pair<SelPoint, SelPoint>?,
+    matchesProvider: (fromSeq: Long, toSeq: Long) -> List<SearchMatch>,
+    currentMatchProvider: () -> SearchMatch?,
     modifier: Modifier
 ) {
     Canvas(modifier) {
@@ -137,15 +163,29 @@ internal fun OutputCanvas(
         revisionState.value
         searchRevisionState.value
         val scrollPx = scrollProvider()
-        val selectionPath = selectionPathProvider()
-        val searchAll = searchAllProvider()
-        val searchCurrent = searchCurrentProvider()
+        if (window.isEmpty) return@Canvas
+        val from = window.indexAt(scrollPx)
+        val to = window.indexAt(scrollPx + size.height)
+        val fromSeq = window.firstSeq + from
+        val toSeq = window.firstSeq + to
         clipRect {
             translate(top = -scrollPx) {
-                if (searchAll != null) drawPath(searchAll, color = SEARCH_ALL_COLOR)
-                if (searchCurrent != null) drawPath(searchCurrent, color = SEARCH_CURRENT_COLOR)
-                if (selectionPath != null) drawPath(selectionPath, color = selectionColor)
-                drawText(layout)
+                val matches = matchesProvider(fromSeq, toSeq)
+                if (matches.isNotEmpty()) {
+                    val all = Path()
+                    for (match in matches) window.pathForMatch(match)?.let { all.addPath(it) }
+                    drawPath(all, color = SEARCH_ALL_COLOR)
+                }
+                currentMatchProvider()
+                    ?.takeIf { it.seq in fromSeq..toSeq }
+                    ?.let { window.pathForMatch(it) }
+                    ?.let { drawPath(it, color = SEARCH_CURRENT_COLOR) }
+                selectionProvider()
+                    ?.let { (a, b) -> window.pathForRange(a.seq, a.col, b.seq, b.col, from, to) }
+                    ?.let { drawPath(it, color = selectionColor) }
+                for (index in from..to) {
+                    drawText(window.layoutOrMeasure(index), topLeft = Offset(0f, window.topOf(index)))
+                }
             }
         }
     }
@@ -161,7 +201,7 @@ internal fun OutputCanvas(
  * @param contentHeightPx полная высота контента
  * @param onScrollTo установить сдвиг (как пользовательский скролл)
  */
-@androidx.compose.runtime.Composable
+@Composable
 internal fun OutputScrollbar(
     scrollProvider: () -> Float,
     maxScroll: Float,

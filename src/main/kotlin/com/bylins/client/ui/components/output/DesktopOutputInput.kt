@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -61,10 +62,14 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+import com.bylins.client.perf.Perf
 import com.bylins.client.ui.AnsiParser
 import com.bylins.client.ui.CommandModifier
+import androidx.compose.ui.text.TextLayoutResult
 import com.bylins.client.ui.scroll.BufferGeometry
-import com.bylins.client.ui.scroll.ContentSnapshot
+import com.bylins.client.ui.scroll.LineLayoutCache
+import com.bylins.client.ui.scroll.LineParseCache
+import com.bylins.client.ui.scroll.LineSnapshot
 import com.bylins.client.ui.scroll.ScrollTarget
 
 private val SELECTION_COLOR = Color(0x804A90E2)
@@ -83,13 +88,13 @@ private val DIVIDER_HEIGHT = 6.dp
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ScrollbackOutputView(
-    snapshot: ContentSnapshot,
+    snapshot: LineSnapshot,
     holder: OutputViewHolder,
     splitFraction: Float,
     onSplitFractionChange: (Float) -> Unit,
     fontFamily: FontFamily,
     fontSize: Int,
-    emptyPlaceholder: AnnotatedString,
+    emptyPlaceholder: String,
     onSearchFocusChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -107,21 +112,40 @@ fun ScrollbackOutputView(
     val controller = holder.controller
     val selection = holder.selection
     val ansiParser = remember { AnsiParser() }
+    val parseCache = remember { LineParseCache { text, state -> ansiParser.parse(text, state) } }
+    val layoutCache = remember { LineLayoutCache<TextLayoutResult>() }
 
-    val limitedRaw = remember(snapshot.text) {
-        if (snapshot.text.length > 100_000) lastLines(snapshot.text, 1000) else snapshot.text
+    // Пустой буфер показывает подсказку — тем же путём, что и вывод, но без
+    // выделения и раздвоения
+    val isEmpty = snapshot.isEmpty
+    val shown = remember(snapshot, emptyPlaceholder) {
+        if (isEmpty) LineSnapshot.of(emptyPlaceholder, snapshot.firstSeq) else snapshot
     }
-    val effectiveFirstSeq = remember(snapshot, limitedRaw) {
-        snapshot.firstSeq + (snapshot.lineCount - ContentSnapshot.countLines(limitedRaw))
+
+    // Разбор ANSI — по строкам, заново только изменившиеся (в норме одна).
+    // «Объём» в замере — сколько строк разобрано
+    val parsed = remember(shown) {
+        val started = System.nanoTime()
+        parseCache.update(shown).also {
+            Perf.record(Perf.Stage.UI_ANSI, System.nanoTime() - started, it.parsedCount.toLong())
+        }
     }
-    val annotated = remember(limitedRaw, emptyPlaceholder) {
-        if (limitedRaw.isEmpty()) emptyPlaceholder else ansiParser.parse(limitedRaw)
+    // Видимый текст по строкам — для поиска и копирования, без склейки в одну строку
+    val plainLines: List<CharSequence> = remember(parsed) {
+        object : AbstractList<CharSequence>() {
+            override val size: Int get() = parsed.lineCount
+            override fun get(index: Int): CharSequence = parsed.lines[index].plain
+        }
     }
-    val plainText = annotated.text
-    val isEmpty = limitedRaw.isEmpty()
+
+    // Кадр с новыми данными нарисован: закрывает сквозной замер «байты пришли
+    // -> игрок увидел». Ключ — снимок: эффект перезапускается на каждой порции
+    LaunchedEffect(snapshot) {
+        withFrameNanos { Perf.painted() }
+    }
     val geometry = BufferGeometry(
-        firstSeq = effectiveFirstSeq,
-        lineCount = if (isEmpty) 0 else ContentSnapshot.countLines(limitedRaw)
+        firstSeq = parsed.firstSeq,
+        lineCount = if (isEmpty) 0 else parsed.lineCount
     )
 
     val style = remember(fontFamily, fontSize) {
@@ -152,16 +176,38 @@ fun ScrollbackOutputView(
             val fullViewportPx = sizePx.height.toFloat()
             val widthPx = (sizePx.width - scrollbarStripPx).toInt().coerceAtLeast(1)
 
-            val layout = remember(annotated, widthPx, style) {
-                measurer.measure(
-                    text = annotated,
-                    style = style,
-                    softWrap = true,
-                    constraints = Constraints(maxWidth = widthPx)
+            // Разметка есть только у строк около якоря прокрутки и у хвоста —
+            // по вьюпорту запаса в каждую сторону, чтобы листание страницами не
+            // выходило за размеченное. Остальные стоят в стопке по оценке высоты
+            // (ширина символа и высота строки — по образцу), и оценка уточняется,
+            // когда строка доезжает до вьюпорта. «Объём» в замере — сколько
+            // строк размечено заново
+            val constraints = remember(widthPx) { Constraints(maxWidth = widthPx) }
+            val sample = remember(style) { measurer.measure(text = AnnotatedString("0"), style = style, softWrap = false) }
+            val sampleHeight = sample.size.height.toFloat()
+            val columns = (widthPx / sample.size.width.coerceAtLeast(1)).coerceAtLeast(1)
+            val visibleLines = (fullViewportPx / lineHeightPx).toInt() + 1
+            val anchorIndex = parsed.indexOfSeq(if (controller.followMode) parsed.lastSeq else holder.anchorSeq)
+            val window = remember(parsed, widthPx, style, anchorIndex, visibleLines) {
+                val started = System.nanoTime()
+                val wanted = listOf(
+                    (anchorIndex - visibleLines)..(anchorIndex + 2 * visibleLines),
+                    (parsed.lineCount - 2 * visibleLines)..(parsed.lineCount - 1)
                 )
+                layoutCache.update(
+                    parsed = parsed,
+                    key = widthPx to style,
+                    wanted = wanted,
+                    estimate = { line -> estimateVisualLines(line.plain, columns) * sampleHeight },
+                    measure = { line ->
+                        measurer.measure(text = line, style = style, softWrap = true, constraints = constraints)
+                    },
+                    heightOf = { it.size.height.toFloat() }
+                ).also {
+                    Perf.record(Perf.Stage.UI_MEASURE, System.nanoTime() - started, it.measuredCount.toLong())
+                }
             }
-            holder.lastLayout = layout
-            val contentHeight = layout.size.height.toFloat()
+            val contentHeight = window.totalHeight
 
             // Всегда две стыкующиеся панели: верх (скроллбэк) + низ (живой хвост).
             // Сумма высот = вьюпорт (разделитель — лишь линия-оверлей, места не занимает).
@@ -179,13 +225,13 @@ fun ScrollbackOutputView(
             // Применяем целевую позицию скроллбэка при ЛЮБОМ изменении контента/вьюпорта.
             // Если следуем за низом — прижимаем к концу; иначе держим заякоренный символ
             // (seq,col) на той же высоте, пересчитывая его точный пиксель в новом layout.
-            LaunchedEffect(snapshot, layout, fullViewportPx, splitFraction) {
+            LaunchedEffect(snapshot, window, fullViewportPx, splitFraction) {
                 if (holder.isSelecting || holder.isScrolling) return@LaunchedEffect
                 if (controller.followMode) {
                     holder.scrollbackScrollPx = maxScroll
                 } else {
                     holder.scrollbackScrollPx =
-                        (anchorToPx(layout, plainText, effectiveFirstSeq, holder.anchorSeq, holder.anchorCol)
+                        (window.anchorToPx(holder.anchorSeq, holder.anchorCol)
                             + holder.anchorOffsetPx).coerceIn(0f, maxScroll)
                 }
             }
@@ -195,12 +241,11 @@ fun ScrollbackOutputView(
             // скроллбэк не у самого низа ⇒ есть разрыв с живым хвостом.
             val split = !isEmpty && scrollbackPx < maxScroll - lineHeightPx
 
-            // Путь подсветки вычисляется в фазе draw (через провайдер), чтобы
-            // перерисовываться при каждом изменении выделения без рекомпозиции.
-            val selectionPathProvider: () -> androidx.compose.ui.graphics.Path? = {
-                if (isEmpty) null
-                else selection.charRange(effectiveFirstSeq, plainText)
-                    ?.let { r -> layout.getPathForRange(r.first, r.last + 1) }
+            // Выделение и совпадения читаются в фазе draw (через провайдеры):
+            // панель перерисовывается при каждом их изменении без рекомпозиции,
+            // а пути строит сама — только для видимых строк
+            val selectionProvider: () -> Pair<com.bylins.client.ui.scroll.SelPoint, com.bylins.client.ui.scroll.SelPoint>? = {
+                if (isEmpty) null else selection.normalized()
             }
             val revisionState = holder.selectionRevisionState
             // Провайдер позиции скроллбэка (верхняя панель) — читается в фазе draw
@@ -208,15 +253,11 @@ fun ScrollbackOutputView(
 
             // --- Поиск: подсветка совпадений (в фазе draw) ---
             val searchRevisionState = holder.searchRevisionState
-            fun matchPath(m: com.bylins.client.ui.scroll.SearchMatch): androidx.compose.ui.graphics.Path =
-                layout.getPathForRange(m.start.coerceIn(0, plainText.length), m.end.coerceIn(0, plainText.length))
-            val searchAllProvider: () -> androidx.compose.ui.graphics.Path? = {
-                val ms = holder.search.matches
-                if (isEmpty || !holder.searchActive || ms.isEmpty()) null
-                else androidx.compose.ui.graphics.Path().apply { ms.forEach { addPath(matchPath(it)) } }
+            val matchesProvider: (Long, Long) -> List<com.bylins.client.ui.scroll.SearchMatch> = { fromSeq, toSeq ->
+                if (isEmpty || !holder.searchActive) emptyList() else holder.search.matchesBetween(fromSeq, toSeq)
             }
-            val searchCurrentProvider: () -> androidx.compose.ui.graphics.Path? = {
-                if (isEmpty || !holder.searchActive) null else holder.search.current?.let { matchPath(it) }
+            val currentMatchProvider: () -> com.bylins.client.ui.scroll.SearchMatch? = {
+                if (isEmpty || !holder.searchActive) null else holder.search.current
             }
 
             // --- Действия (пересоздаются каждую рекомпозицию, видят актуальные значения) ---
@@ -225,10 +266,10 @@ fun ScrollbackOutputView(
                 // У самого низа защёлкиваем точно в конец (чтобы виды были непрерывны)
                 val atBottom = clamped >= maxScroll - lineHeightPx
                 holder.scrollbackScrollPx = if (atBottom) maxScroll else clamped
-                val (aseq, acol) = pxToAnchor(layout, plainText, effectiveFirstSeq, clamped)
+                val (aseq, acol) = window.pxToAnchor(clamped)
                 holder.anchorSeq = aseq
                 holder.anchorCol = acol
-                holder.anchorOffsetPx = clamped - anchorToPx(layout, plainText, effectiveFirstSeq, aseq, acol)
+                holder.anchorOffsetPx = clamped - window.anchorToPx(aseq, acol)
                 controller.onUserScroll(atBottom, aseq)
             }
             val collapse: () -> Unit = {
@@ -240,19 +281,18 @@ fun ScrollbackOutputView(
             // Прокрутить к текущему совпадению (через якорь, с парой строк контекста сверху)
             val jumpToMatch: () -> Unit = {
                 holder.search.current?.let { m ->
-                    val lineIdx = com.bylins.client.ui.scroll.BufferOffsets.lineIndexOfOffset(plainText, m.start)
-                    val targetSeq = (effectiveFirstSeq + lineIdx - 2).coerceAtLeast(effectiveFirstSeq)
+                    val targetSeq = (m.seq - 2).coerceAtLeast(parsed.firstSeq)
                     holder.anchorSeq = targetSeq
                     holder.anchorCol = 0
                     holder.anchorOffsetPx = 0f
                     controller.jumpToLine(targetSeq)
                     holder.scrollbackScrollPx =
-                        anchorToPx(layout, plainText, effectiveFirstSeq, targetSeq, 0).coerceIn(0f, maxScroll)
+                        window.anchorToPx(targetSeq, 0).coerceIn(0f, maxScroll)
                 }
             }
             val onSearchQueryChange: (String) -> Unit = { q ->
                 searchQuery = q
-                holder.search.update(q, plainText)
+                holder.search.update(q, parsed.firstSeq, plainLines)
                 holder.bumpSearch()
                 jumpToMatch()
             }
@@ -265,8 +305,8 @@ fun ScrollbackOutputView(
                 runCatching { focusRequester.requestFocus() }
             }
             // Перепоиск при изменении контента/опций (без перехода — только обновить подсветку/счётчик)
-            LaunchedEffect(plainText, searchQuery, holder.search.caseSensitive, holder.search.useRegex) {
-                if (searchQuery.isNotEmpty()) { holder.search.update(searchQuery, plainText); holder.bumpSearch() }
+            LaunchedEffect(parsed, searchQuery, holder.search.caseSensitive, holder.search.useRegex) {
+                if (searchQuery.isNotEmpty()) { holder.search.update(searchQuery, parsed.firstSeq, plainLines); holder.bumpSearch() }
             }
             // Указатель -> точка выделения (с учётом того, в какой панели курсор)
             val pointToSel: (Offset) -> com.bylins.client.ui.scroll.SelPoint = { pos ->
@@ -276,11 +316,11 @@ fun ScrollbackOutputView(
                 } else {
                     pos.y + scrollbackPx
                 }
-                pointToSelPoint(layout, plainText, effectiveFirstSeq, pos.x, contentY)
+                window.pointToSelPoint(pos.x, contentY)
             }
             val copySelection: () -> Unit = {
                 if (!isEmpty) {
-                    val text = selection.copyText(effectiveFirstSeq, plainText)
+                    val text = selection.copyText(parsed.firstSeq, parsed.lineCount) { parsed.lines[it].plain }
                     if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
                 }
             }
@@ -299,7 +339,7 @@ fun ScrollbackOutputView(
                     event.key == Key.F3 -> { nextMatch(); true }
                     event.key == Key.Escape && holder.searchActive -> { closeSearch(); true }
                     isCommand(event) && event.key == Key.A -> {
-                        selection.selectAll(effectiveFirstSeq, geometry.lineCount); holder.bumpSelection(); true
+                        selection.selectAll(geometry.firstSeq, geometry.lineCount); holder.bumpSelection(); true
                     }
                     isCommand(event) && event.key == Key.C -> { copySelection(); true }
                     event.isCtrlPressed && event.key == Key.Insert -> { copySelection(); true }
@@ -390,39 +430,39 @@ fun ScrollbackOutputView(
                     // Две стыкующиеся панели: верх (скроллбэк) + низ (живой хвост у конца).
                     Column(Modifier.fillMaxSize()) {
                         OutputCanvas(
-                            layout = layout,
+                            window = window,
                             scrollProvider = scrollbackProvider,
                             selectionColor = SELECTION_COLOR,
                             revisionState = revisionState,
                             searchRevisionState = searchRevisionState,
-                            selectionPathProvider = selectionPathProvider,
-                            searchAllProvider = searchAllProvider,
-                            searchCurrentProvider = searchCurrentProvider,
+                            selectionProvider = selectionProvider,
+                            matchesProvider = matchesProvider,
+                            currentMatchProvider = currentMatchProvider,
                             modifier = Modifier.fillMaxWidth().weight(1f - splitFraction)
                         )
                         OutputCanvas(
-                            layout = layout,
+                            window = window,
                             scrollProvider = { bottomScrollPx },
                             selectionColor = SELECTION_COLOR,
                             revisionState = revisionState,
                             searchRevisionState = searchRevisionState,
-                            selectionPathProvider = selectionPathProvider,
-                            searchAllProvider = searchAllProvider,
-                            searchCurrentProvider = searchCurrentProvider,
+                            selectionProvider = selectionProvider,
+                            matchesProvider = matchesProvider,
+                            currentMatchProvider = currentMatchProvider,
                             modifier = Modifier.fillMaxWidth().weight(splitFraction)
                         )
                     }
                 } else {
                     // Одно окно: скроллбэк внизу непрерывен с хвостом — показываем как единый вид.
                     OutputCanvas(
-                        layout = layout,
+                        window = window,
                         scrollProvider = scrollbackProvider,
                         selectionColor = SELECTION_COLOR,
                         revisionState = revisionState,
                         searchRevisionState = searchRevisionState,
-                        selectionPathProvider = selectionPathProvider,
-                        searchAllProvider = searchAllProvider,
-                        searchCurrentProvider = searchCurrentProvider,
+                        selectionProvider = selectionProvider,
+                        matchesProvider = matchesProvider,
+                        currentMatchProvider = currentMatchProvider,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -505,12 +545,12 @@ fun ScrollbackOutputView(
                     caseSensitive = holder.search.caseSensitive,
                     onToggleCase = {
                         holder.search.caseSensitive = !holder.search.caseSensitive
-                        holder.search.update(searchQuery, plainText); holder.bumpSearch()
+                        holder.search.update(searchQuery, parsed.firstSeq, plainLines); holder.bumpSearch()
                     },
                     useRegex = holder.search.useRegex,
                     onToggleRegex = {
                         holder.search.useRegex = !holder.search.useRegex
-                        holder.search.update(searchQuery, plainText); holder.bumpSearch()
+                        holder.search.update(searchQuery, parsed.firstSeq, plainLines); holder.bumpSearch()
                     },
                     onNext = nextMatch,
                     onPrev = prevMatch,

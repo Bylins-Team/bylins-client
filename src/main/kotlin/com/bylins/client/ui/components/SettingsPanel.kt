@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.sp
 import com.bylins.client.ClientState
 import com.bylins.client.OperatingSystem
 import com.bylins.client.config.MAX_CONFIG_BACKUPS
+import com.bylins.client.config.MAX_OUTPUT_BUFFER_LINES
+import com.bylins.client.config.MIN_OUTPUT_BUFFER_LINES
 import com.bylins.client.PERMANENT_TAB_IDS
 import com.bylins.client.ui.theme.LocalAppColorScheme
 import com.bylins.client.ui.ALL_TABS
@@ -206,6 +208,51 @@ fun SettingsPanel(
                         text = "Сохранять цвета (ANSI-коды)",
                         color = colorScheme.onSurface,
                         fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+
+                Divider(color = colorScheme.divider, modifier = Modifier.padding(vertical = 8.dp))
+
+                // Глубина истории вывода. Платится памятью, не задержкой:
+                // на приход текста работа идёт по изменившимся строкам
+                val outputBufferLines by clientState.outputBufferLines.collectAsState()
+                var bufferText by remember(outputBufferLines) { mutableStateOf(outputBufferLines.toString()) }
+
+                Text(
+                    text = "История вывода",
+                    color = colorScheme.onSurface,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = bufferText,
+                        onValueChange = { value ->
+                            bufferText = value.filter { it.isDigit() }.take(7)
+                            bufferText.toIntOrNull()?.let { clientState.setOutputBufferLines(it) }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.width(110.dp),
+                        textStyle = LocalTextStyle.current.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
+                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                            textColor = colorScheme.onSurface,
+                            backgroundColor = colorScheme.background,
+                            cursorColor = colorScheme.onSurface,
+                            focusedBorderColor = colorScheme.primary,
+                            unfocusedBorderColor = colorScheme.border
+                        )
+                    )
+                    Text(
+                        text = "строк держится в памяти и доступно прокруткой, поиском и выделением " +
+                            "(от $MIN_OUTPUT_BUFFER_LINES до $MAX_OUTPUT_BUFFER_LINES). " +
+                            "Около килобайта на строку",
+                        color = colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(start = 8.dp)
                     )

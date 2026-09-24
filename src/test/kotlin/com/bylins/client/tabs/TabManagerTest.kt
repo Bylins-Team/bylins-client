@@ -93,7 +93,7 @@ class TabManagerTest {
         manager.processText("Hello world")
 
         val mainTab = manager.getTab("main")
-        assertTrue(mainTab!!.content.value.contains("Hello world"))
+        assertTrue(mainTab!!.snapshot.value.text().contains("Hello world"))
     }
 
     @Test
@@ -109,7 +109,7 @@ class TabManagerTest {
         manager.processText("Вася говорит вам: привет")
 
         val chat = manager.getTab("chat")
-        assertTrue(chat!!.content.value.contains("говорит вам"))
+        assertTrue(chat!!.snapshot.value.text().contains("говорит вам"))
     }
 
     @Test
@@ -128,8 +128,8 @@ class TabManagerTest {
         val mainTab = manager.getTab("main")
         val chatTabResult = manager.getTab("chat")
 
-        assertFalse(mainTab!!.content.value.contains("секретно"))
-        assertTrue(chatTabResult!!.content.value.contains("секретно"))
+        assertFalse(mainTab!!.snapshot.value.text().contains("секретно"))
+        assertTrue(chatTabResult!!.snapshot.value.text().contains("секретно"))
     }
 
     @Test
@@ -148,8 +148,8 @@ class TabManagerTest {
         val mainTab = manager.getTab("main")
         val chatTabResult = manager.getTab("chat")
 
-        assertTrue(mainTab!!.content.value.contains("копия"))
-        assertTrue(chatTabResult!!.content.value.contains("копия"))
+        assertTrue(mainTab!!.snapshot.value.text().contains("копия"))
+        assertTrue(chatTabResult!!.snapshot.value.text().contains("копия"))
     }
 
     @Test
@@ -158,7 +158,7 @@ class TabManagerTest {
         manager.addToMainTab("Direct text")
 
         val mainTab = manager.getTab("main")
-        assertTrue(mainTab!!.content.value.contains("Direct text"))
+        assertTrue(mainTab!!.snapshot.value.text().contains("Direct text"))
     }
 
     @Test
@@ -168,7 +168,7 @@ class TabManagerTest {
         manager.clearTab("main")
 
         val mainTab = manager.getTab("main")
-        assertEquals("", mainTab!!.content.value)
+        assertEquals("", mainTab!!.snapshot.value.text())
     }
 
     @Test
@@ -179,12 +179,11 @@ class TabManagerTest {
 
         manager.processText("Content for main")
         manager.getTab("test")?.appendText("Content for test")
-        manager.getTab("test")?.flush()
 
         manager.clearAll()
 
-        assertEquals("", manager.getTab("main")!!.content.value)
-        assertEquals("", manager.getTab("test")!!.content.value)
+        assertEquals("", manager.getTab("main")!!.snapshot.value.text())
+        assertEquals("", manager.getTab("test")!!.snapshot.value.text())
     }
 
     @Test

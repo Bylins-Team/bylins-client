@@ -380,6 +380,24 @@ class ClientState {
         saveConfig()
     }
 
+    /**
+     * Сколько строк вывода держать в памяти.
+     *
+     * Столько же доступно прокруткой, поиском и выделением. Разбор, разметка
+     * и поиск идут по строкам и заново только для изменившихся, так что
+     * глубина платится памятью, а не задержкой; что дорого — видно в `#perf`.
+     */
+    private val _outputBufferLines = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_BUFFER_LINES)
+    val outputBufferLines: StateFlow<Int> = _outputBufferLines
+
+    fun setOutputBufferLines(lines: Int) {
+        val value = lines.coerceIn(com.bylins.client.config.MIN_OUTPUT_BUFFER_LINES, com.bylins.client.config.MAX_OUTPUT_BUFFER_LINES)
+        if (_outputBufferLines.value == value) return
+        _outputBufferLines.value = value
+        telnetClient.setOutputBufferLines(value)
+        saveConfig()
+    }
+
     private val _sidePanelCollapsed = MutableStateFlow(false)
     val sidePanelCollapsed: StateFlow<Boolean> = _sidePanelCollapsed
     fun setSidePanelCollapsed(collapsed: Boolean) {
@@ -429,7 +447,6 @@ class ClientState {
         private set
 
     val isConnected: StateFlow<Boolean> = telnetClient.isConnected
-    val receivedData: StateFlow<String> = telnetClient.receivedData
     // Снимок главной вкладки с абсолютной нумерацией строк (для панели вывода)
     val mainOutputSnapshot = telnetClient.snapshot
 
@@ -653,6 +670,8 @@ class ClientState {
         val configData = configManager.loadConfig()
         _pluginPermissions.value = configData.pluginPermissions
         _configBackups.value = configData.configBackups
+        _outputBufferLines.value = configData.outputBufferLines
+        telnetClient.setOutputBufferLines(configData.outputBufferLines)
 
         // Инициализируем скриптинг
         initializeScripting()
@@ -1883,6 +1902,7 @@ class ClientState {
             statusGroupCollapsed = _statusGroupCollapsed.value,
             sidePanelCollapsed = _sidePanelCollapsed.value,
             configBackups = _configBackups.value,
+            outputBufferLines = _outputBufferLines.value,
             pluginPermissions = _pluginPermissions.value,
             outputSplitFractions = getOutputSplitFractions()
         )
@@ -2913,7 +2933,6 @@ class ClientState {
                 if (tab != null) {
                     val isActive = tabManager.activeTabId.value == id
                     tab.appendText(text, markUnread = !isActive)
-                    tab.flush()
                 }
             },
             closeOutputTabFunc = { id ->
