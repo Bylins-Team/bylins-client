@@ -1,0 +1,164 @@
+package com.bylins.client.perf
+
+import mu.KotlinLogging
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicLongArray
+
+private val logger = KotlinLogging.logger("Perf")
+
+/**
+ * Замеры этапов обработки вывода.
+ *
+ * Включать нечего: пара nanoTime стоит наносекунды, а телеметрия, которую надо
+ * догадаться включить, не ловит ничего — пока спросишь игрока, он уже ушёл.
+ * Поэтому этапы меряются всегда, а в лог само попадает только то, что вылезло
+ * за [slowThresholdMs] — с обстановкой, по которой видно, отчего стало дорого.
+ *
+ * Считаем в гистограмме по степеням двойки: она даёт процентиль без хранения
+ * отдельных замеров и без единой аллокации на горячем пути.
+ */
+object Perf {
+
+    /** Дольше этого — строка в лог. Кадр длиннее 50 мс игрок уже замечает. */
+    var slowThresholdMs: Long = 50
+
+    /** Этапы обработки. Порядок — как в конвейере, им же печатается отчёт. */
+    enum class Stage(val title: String) {
+        NET_PARSE("telnet: разбор пакета"),
+        TEXT_PROCESS("текст: события и триггеры"),
+        TABS_ROUTE("вкладки: раскладка"),
+        BUFFER_APPEND("буфер: добавление"),
+        UI_ANSI("вывод: разбор ANSI"),
+        UI_MEASURE("вывод: разметка текста"),
+        END_TO_END("от прихода байтов до кадра")
+    }
+
+    private const val BUCKETS = 32
+
+    private class Counters {
+        val count = AtomicLong()
+        val totalNanos = AtomicLong()
+        val maxNanos = AtomicLong()
+        /** Корзина i — замеры от 2^i до 2^(i+1) микросекунд. */
+        val histogram = AtomicLongArray(BUCKETS)
+
+        fun add(nanos: Long) {
+            count.incrementAndGet()
+            totalNanos.addAndGet(nanos)
+            maxNanos.accumulateAndGet(nanos, ::maxOf)
+            val micros = nanos / 1_000
+            val bucket = if (micros <= 0) 0 else (63 - java.lang.Long.numberOfLeadingZeros(micros)).coerceIn(0, BUCKETS - 1)
+            histogram.incrementAndGet(bucket)
+        }
+
+        fun reset() {
+            count.set(0)
+            totalNanos.set(0)
+            maxNanos.set(0)
+            for (i in 0 until BUCKETS) histogram.set(i, 0)
+        }
+
+        /** Верхняя граница корзины, в которую попадает заданная доля замеров. */
+        fun percentileMicros(fraction: Double): Long {
+            val total = count.get()
+            if (total == 0L) return 0
+            val target = (total * fraction).toLong().coerceAtLeast(1)
+            var seen = 0L
+            for (i in 0 until BUCKETS) {
+                seen += histogram.get(i)
+                if (seen >= target) return 1L shl (i + 1)
+            }
+            return maxNanos.get() / 1_000
+        }
+    }
+
+    private val stages = Stage.values().associateWith { Counters() }
+
+    /**
+     * Меряет блок.
+     *
+     * @param size размер обрабатываемого куска — попадает в строку о медленном
+     *   этапе. Считать его дорого не надо: он нужен, только когда стало плохо
+     */
+    inline fun <T> measure(stage: Stage, size: Long = -1, block: () -> T): T {
+        val started = System.nanoTime()
+        try {
+            return block()
+        } finally {
+            record(stage, System.nanoTime() - started, size)
+        }
+    }
+
+    /** Вынесено из measure: inline-функция не может трогать приватные поля. */
+    fun record(stage: Stage, nanos: Long, size: Long = -1) {
+        stages.getValue(stage).add(nanos)
+        val ms = nanos / 1_000_000
+        if (ms >= slowThresholdMs) {
+            val where = if (size >= 0) ", объём $size" else ""
+            logger.warn { "Медленно: ${stage.title} — $ms мс$where" }
+        }
+    }
+
+    // --- Сквозное время ---
+    //
+    // Держим момент прихода ПЕРВОГО ещё не нарисованного куска: игрок ждёт
+    // именно с него, а не с последнего. Ноль означает «всё нарисовано».
+    private val pendingInputNanos = AtomicLong(0)
+
+    /** Пришли данные, которые ещё не показаны. */
+    fun inputArrived() {
+        pendingInputNanos.compareAndSet(0, System.nanoTime())
+    }
+
+    /** Кадр с этими данными отрисован. */
+    fun painted() {
+        val started = pendingInputNanos.getAndSet(0)
+        if (started != 0L) record(Stage.END_TO_END, System.nanoTime() - started)
+    }
+
+    fun reset() {
+        stages.values.forEach { it.reset() }
+        pendingInputNanos.set(0)
+    }
+
+    /** Человекочитаемый отчёт: этапы плюс память и сборщик мусора. */
+    fun report(): String = buildString {
+        appendLine("Этап                              вызовов   сумма    среднее   p95    макс")
+        for (stage in Stage.values()) {
+            val c = stages.getValue(stage)
+            val count = c.count.get()
+            if (count == 0L) continue
+            val totalMs = c.totalNanos.get() / 1_000_000.0
+            val avgMs = c.totalNanos.get() / 1_000_000.0 / count
+            val p95Ms = c.percentileMicros(0.95) / 1_000.0
+            val maxMs = c.maxNanos.get() / 1_000_000.0
+            appendLine(
+                "%-32s %7d %7.0f мс %6.1f %6.1f %7.1f".format(stage.title, count, totalMs, avgMs, p95Ms, maxMs)
+            )
+        }
+        appendLine()
+        appendLine(memoryLine())
+        appendLine(gcLine())
+        append("Порог жалобы в лог: ${slowThresholdMs} мс")
+    }
+
+    private fun memoryLine(): String {
+        val runtime = Runtime.getRuntime()
+        val usedMb = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
+        val totalMb = runtime.totalMemory() / 1024 / 1024
+        val maxMb = runtime.maxMemory() / 1024 / 1024
+        return "Память: занято $usedMb МБ, выделено $totalMb МБ, потолок $maxMb МБ"
+    }
+
+    /**
+     * Паузы сборщика надо видеть рядом с временами этапов: иначе непонятно,
+     * тормозит наш код или сборка мусора, которой мы этот мусор и создали.
+     */
+    private fun gcLine(): String {
+        val beans = runCatching { java.lang.management.ManagementFactory.getGarbageCollectorMXBeans() }
+            .getOrNull() ?: return "Сборщик мусора: нет данных"
+        return beans.joinToString("; ", prefix = "Сборщик мусора: ") { bean ->
+            "${bean.name}: ${bean.collectionCount} раз, ${bean.collectionTime} мс"
+        }
+    }
+}

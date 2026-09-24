@@ -215,7 +215,10 @@ class TabManager {
      * Обрабатывает входящий текст и распределяет его по вкладкам
      * Возвращает текст, который должен остаться в главной вкладке
      */
-    fun processText(text: String): String {
+    fun processText(text: String): String = com.bylins.client.perf.Perf.measure(
+        com.bylins.client.perf.Perf.Stage.TABS_ROUTE,
+        text.length.toLong()
+    ) {
         // Используем общий ansiParser вместо создания нового
         val lines = text.split("\n")
         val mainLines = mutableListOf<String>()

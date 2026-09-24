@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -61,6 +62,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
+import com.bylins.client.perf.Perf
 import com.bylins.client.ui.AnsiParser
 import com.bylins.client.ui.CommandModifier
 import com.bylins.client.ui.scroll.BufferGeometry
@@ -115,7 +117,15 @@ fun ScrollbackOutputView(
         snapshot.firstSeq + (snapshot.lineCount - ContentSnapshot.countLines(limitedRaw))
     }
     val annotated = remember(limitedRaw, emptyPlaceholder) {
-        if (limitedRaw.isEmpty()) emptyPlaceholder else ansiParser.parse(limitedRaw)
+        Perf.measure(Perf.Stage.UI_ANSI, limitedRaw.length.toLong()) {
+            if (limitedRaw.isEmpty()) emptyPlaceholder else ansiParser.parse(limitedRaw)
+        }
+    }
+
+    // Кадр с новыми данными нарисован: закрывает сквозной замер «байты пришли
+    // -> игрок увидел». Ключ — снимок: эффект перезапускается на каждой порции
+    LaunchedEffect(snapshot) {
+        withFrameNanos { Perf.painted() }
     }
     val plainText = annotated.text
     val isEmpty = limitedRaw.isEmpty()
@@ -153,12 +163,14 @@ fun ScrollbackOutputView(
             val widthPx = (sizePx.width - scrollbarStripPx).toInt().coerceAtLeast(1)
 
             val layout = remember(annotated, widthPx, style) {
+                Perf.measure(Perf.Stage.UI_MEASURE, annotated.length.toLong()) {
                 measurer.measure(
                     text = annotated,
                     style = style,
                     softWrap = true,
                     constraints = Constraints(maxWidth = widthPx)
                 )
+                }
             }
             holder.lastLayout = layout
             val contentHeight = layout.size.height.toFloat()

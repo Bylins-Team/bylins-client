@@ -2,6 +2,7 @@ package com.bylins.client.network
 
 import mu.KotlinLogging
 import com.bylins.client.ClientState
+import com.bylins.client.perf.Perf
 import com.bylins.client.ui.scroll.ContentSnapshot
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -238,31 +239,38 @@ class TelnetClient(
     /**
      * Добавляет текст в буфер с ограничением размера
      */
-    private fun appendToBuffer(text: String) = synchronized(bufferLock) {
-        val currentValue = _receivedData.value
-        val totalLength = currentValue.length + text.length
+    private fun appendToBuffer(text: String) {
+        // Замер снаружи замка: ожидание чужой записи — такая же задержка
+        // для игрока, как и сама работа
+        Perf.measure(Perf.Stage.BUFFER_APPEND, _receivedData.value.length.toLong()) {
+            synchronized(bufferLock) {
 
-        // Если буфер превышает лимит, обрезаем старые строки
-        if (totalLength > MAX_BUFFER_SIZE) {
-            // Находим позицию, с которой начинаем хранить данные (оставляем последние 80% буфера)
-            val keepSize = (MAX_BUFFER_SIZE * 0.8).toInt()
-            val cutPosition = currentValue.length - keepSize
+            val currentValue = _receivedData.value
+            val totalLength = currentValue.length + text.length
 
-            // Ищем ближайший перенос строки после позиции обрезки
-            val nextNewline = currentValue.indexOf('\n', cutPosition.coerceAtLeast(0))
+            // Если буфер превышает лимит, обрезаем старые строки
+            if (totalLength > MAX_BUFFER_SIZE) {
+                // Находим позицию, с которой начинаем хранить данные (оставляем последние 80% буфера)
+                val keepSize = (MAX_BUFFER_SIZE * 0.8).toInt()
+                val cutPosition = currentValue.length - keepSize
 
-            val removedEnd = if (nextNewline != -1) nextNewline + 1 else cutPosition.coerceAtLeast(0)
-            val truncatedValue = currentValue.substring(removedEnd)
+                // Ищем ближайший перенос строки после позиции обрезки
+                val nextNewline = currentValue.indexOf('\n', cutPosition.coerceAtLeast(0))
 
-            // Сколько логических строк удалено сверху. Строка-сентинел [Buffer cleared]
-            // добавляется обратно как одна строка, поэтому seq сдвигается на (removed - 1),
-            // чтобы сохранившиеся строки сохранили свой абсолютный seq.
-            val removedLines = currentValue.substring(0, removedEnd).count { it == '\n' }
-            firstSeq += (removedLines - 1).coerceAtLeast(0)
+                val removedEnd = if (nextNewline != -1) nextNewline + 1 else cutPosition.coerceAtLeast(0)
+                val truncatedValue = currentValue.substring(removedEnd)
 
-            setReceived("\u001B[1;33m[Buffer cleared]\u001B[0m\n" + truncatedValue + text)
-        } else {
-            setReceived(currentValue + text)
+                // Сколько логических строк удалено сверху. Строка-сентинел [Buffer cleared]
+                // добавляется обратно как одна строка, поэтому seq сдвигается на (removed - 1),
+                // чтобы сохранившиеся строки сохранили свой абсолютный seq.
+                val removedLines = currentValue.substring(0, removedEnd).count { it == '\n' }
+                firstSeq += (removedLines - 1).coerceAtLeast(0)
+
+                setReceived("\u001B[1;33m[Buffer cleared]\u001B[0m\n" + truncatedValue + text)
+            } else {
+                setReceived(currentValue + text)
+            }
+            }
         }
     }
 
@@ -279,7 +287,10 @@ class TelnetClient(
                     }
 
                     val data = buffer.copyOf(bytesRead)
-                    val (text, telnetCommands) = telnetParser.parse(data)
+                    Perf.inputArrived()
+                    val (text, telnetCommands) = Perf.measure(Perf.Stage.NET_PARSE, bytesRead.toLong()) {
+                        telnetParser.parse(data)
+                    }
 
                     // Telnet-команды разбираем ПЕРЕД текстом: в одном пакете
                     // сервер шлёт и MSDP с новой комнатой, и её описание.
@@ -291,7 +302,9 @@ class TelnetClient(
 
                     if (text.isNotEmpty()) {
                         // Обрабатываем текст триггерами и получаем модифицированную версию с colorize
-                        val modifiedText = clientState?.processIncomingText(text) ?: text
+                        val modifiedText = Perf.measure(Perf.Stage.TEXT_PROCESS, text.length.toLong()) {
+                            clientState?.processIncomingText(text) ?: text
+                        }
                         appendToBuffer(modifiedText)
                     }
                 }

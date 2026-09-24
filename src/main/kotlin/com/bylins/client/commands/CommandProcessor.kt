@@ -77,6 +77,13 @@ class CommandProcessor(
                 return true
             }
 
+            // Замеры этапов: когда игрок говорит «тормозит», это единственный
+            // способ не гадать. Порог жалоб в лог настраивается тут же
+            command == "#perf" || command.startsWith("#perf ") -> {
+                showPerf(command.removePrefix("#perf").trim())
+                return true
+            }
+
             command.startsWith("#sound ") -> {
                 val soundType = command.substring(7).trim().lowercase()
                 val type = when (soundType) {
@@ -480,6 +487,32 @@ class CommandProcessor(
     /**
      * Показывает справку по доступным командам
      */
+    /**
+     * Отчёт по замерам: этапы, память, сборщик мусора.
+     *
+     * `#perf reset` обнуляет, `#perf slow <мс>` меняет порог жалоб в лог.
+     */
+    private fun showPerf(argument: String) {
+        val parts = argument.split(" ").filter { it.isNotEmpty() }
+        when (parts.firstOrNull()) {
+            null -> context.addLocalOutput(com.bylins.client.perf.Perf.report())
+            "reset" -> {
+                com.bylins.client.perf.Perf.reset()
+                context.addLocalOutput("[#perf] Замеры обнулены")
+            }
+            "slow" -> {
+                val ms = parts.getOrNull(1)?.toLongOrNull()
+                if (ms == null || ms <= 0) {
+                    context.addLocalOutput("[#perf] Использование: #perf slow <миллисекунды>")
+                } else {
+                    com.bylins.client.perf.Perf.slowThresholdMs = ms
+                    context.addLocalOutput("[#perf] Порог жалобы в лог: $ms мс")
+                }
+            }
+            else -> context.addLocalOutput("[#perf] Использование: #perf [reset|slow <мс>]")
+        }
+    }
+
     private fun showHelp() {
         val help = """
             |═══════════════════════════════════════════════════════════════
