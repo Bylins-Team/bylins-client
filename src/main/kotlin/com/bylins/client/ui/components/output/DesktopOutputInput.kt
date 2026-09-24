@@ -352,7 +352,7 @@ fun ScrollbackOutputView(
                         selection.selectAll(geometry.firstSeq, geometry.lineCount); holder.bumpSelection(); true
                     }
                     isCommand(event) && com.bylins.client.hotkeys.PhysicalKey.of(event) == Key.C -> { copySelection(); true }
-                    event.isCtrlPressed && event.key == Key.Insert -> { copySelection(); true }
+                    event.isCtrlPressed && com.bylins.client.hotkeys.PhysicalKey.of(event) == Key.Insert -> { copySelection(); true }
                     event.key == Key.PageDown -> { userScrollTo(scrollbackPx + topPaneHeightPx); true }
                     event.key == Key.PageUp -> { userScrollTo(scrollbackPx - topPaneHeightPx); true }
                     event.key == Key.DirectionDown -> { userScrollTo(scrollbackPx + lineHeightPx); true }
