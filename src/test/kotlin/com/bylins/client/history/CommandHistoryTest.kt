@@ -64,6 +64,20 @@ class CommandHistoryTest {
     }
 
     @Test
+    fun `уменьшение предела обрезает историю и файл`() {
+        val file = tempFile()
+        val history = CommandHistory(maxSize = 5, file = file)
+        for (i in 1..5) history.add("команда $i")
+        waitForLines(file, 5)
+
+        history.maxSize = 2
+
+        assertEquals(listOf("команда 4", "команда 5"), history.all())
+        waitForLines(file, 2)
+        assertEquals(listOf("команда 4", "команда 5"), Files.readAllLines(file))
+    }
+
+    @Test
     fun `пустые строки в историю не идут`() {
         val history = CommandHistory(file = tempFile())
         history.add("   ")

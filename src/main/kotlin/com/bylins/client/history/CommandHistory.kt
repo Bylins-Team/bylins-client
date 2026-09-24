@@ -17,7 +17,7 @@ import java.nio.file.StandardOpenOption
  * за сеанс не должна от этого зависеть.
  */
 class CommandHistory(
-    private val maxSize: Int = DEFAULT_MAX_SIZE,
+    maxSize: Int = DEFAULT_MAX_SIZE,
     file: Path? = null
 ) {
     companion object {
@@ -47,6 +47,15 @@ class CommandHistory(
 
     private val items = mutableListOf<String>()
 
+    /** Предел приходит из конфига (commandHistorySize) уже после создания объекта. */
+    var maxSize: Int = maxSize
+        set(value) {
+            val limit = value.coerceAtLeast(1)
+            if (field == limit) return
+            field = limit
+            if (trimToMaxSize()) rewrite()
+        }
+
     init {
         load()
     }
@@ -59,11 +68,7 @@ class CommandHistory(
     fun add(command: String) {
         if (command.isBlank()) return
         items.add(command)
-        var trimmed = false
-        while (items.size > maxSize) {
-            items.removeAt(0)
-            trimmed = true
-        }
+        val trimmed = trimToMaxSize()
         append(command, rewrite = trimmed)
     }
 
@@ -81,6 +86,27 @@ class CommandHistory(
             }
         }
         return seen.toList()
+    }
+
+    private fun trimToMaxSize(): Boolean {
+        var trimmed = false
+        while (items.size > maxSize) {
+            items.removeAt(0)
+            trimmed = true
+        }
+        return trimmed
+    }
+
+    private fun rewrite() {
+        val snapshot = items.toList()
+        ioScope.launch {
+            try {
+                Files.createDirectories(file.parent)
+                Files.write(file, snapshot)
+            } catch (e: Exception) {
+                println("CommandHistory: не сохранить историю (${e.message})")
+            }
+        }
     }
 
     private fun load() {

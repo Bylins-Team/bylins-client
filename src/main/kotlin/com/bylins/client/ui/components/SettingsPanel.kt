@@ -24,6 +24,8 @@ import com.bylins.client.OperatingSystem
 import com.bylins.client.config.MAX_CONFIG_BACKUPS
 import com.bylins.client.config.MAX_OUTPUT_BUFFER_LINES
 import com.bylins.client.config.MIN_OUTPUT_BUFFER_LINES
+import com.bylins.client.config.MAX_COMMAND_HISTORY_SIZE
+import com.bylins.client.config.MIN_COMMAND_HISTORY_SIZE
 import com.bylins.client.PERMANENT_TAB_IDS
 import com.bylins.client.ui.theme.LocalAppColorScheme
 import com.bylins.client.ui.ALL_TABS
@@ -251,6 +253,50 @@ fun SettingsPanel(
                         text = "строк держится в памяти и доступно прокруткой, поиском и выделением " +
                             "(от $MIN_OUTPUT_BUFFER_LINES до $MAX_OUTPUT_BUFFER_LINES). " +
                             "Около килобайта на строку",
+                        color = colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+
+                Divider(color = colorScheme.divider, modifier = Modifier.padding(vertical = 8.dp))
+
+                // Глубина истории ввода: стрелки и подстановка по Tab
+                val commandHistorySize by clientState.commandHistorySize.collectAsState()
+                var historyText by remember(commandHistorySize) { mutableStateOf(commandHistorySize.toString()) }
+
+                Text(
+                    text = "История команд",
+                    color = colorScheme.onSurface,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = historyText,
+                        onValueChange = { value ->
+                            historyText = value.filter { it.isDigit() }.take(5)
+                            historyText.toIntOrNull()?.let { clientState.setCommandHistorySize(it) }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.width(110.dp),
+                        textStyle = LocalTextStyle.current.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
+                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                            textColor = colorScheme.onSurface,
+                            backgroundColor = colorScheme.background,
+                            cursorColor = colorScheme.onSurface,
+                            focusedBorderColor = colorScheme.primary,
+                            unfocusedBorderColor = colorScheme.border
+                        )
+                    )
+                    Text(
+                        text = "команд помнит строка ввода: стрелки вверх-вниз и подстановка по Tab " +
+                            "(от $MIN_COMMAND_HISTORY_SIZE до $MAX_COMMAND_HISTORY_SIZE). " +
+                            "Хранится в ~/.bylins-client/history.txt",
                         color = colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,

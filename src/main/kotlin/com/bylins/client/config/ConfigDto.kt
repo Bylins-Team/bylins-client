@@ -386,5 +386,6 @@ data class ClientConfig(
     val configBackups: Int = 3,
     // Сколько строк вывода держать в памяти: столько доступно прокруткой,
     // поиском и выделением. Работа на приход текста от глубины не зависит
-    val outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES
+    val outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES,
+    val commandHistorySize: Int = DEFAULT_COMMAND_HISTORY_SIZE
 )
