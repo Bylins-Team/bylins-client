@@ -52,10 +52,12 @@ ui/scroll/                         (чистый Kotlin, без Compose — те
   BufferOffsets.kt       seq↔строка↔столбец↔char-offset
   OutputSelection.kt     выделение по (seq,col) всего буфера
   OutputSearch.kt        поиск (подстрока/regex), навигация по совпадениям
+  LineStack.kt           стопка строк: высоты → вертикальные позиции, поиск строки по y
+  LineLayoutCache.kt     разметка по строкам: переиспользование неизменившихся
 
 ui/components/output/               (Compose desktop)
   OutputViewHolder.kt    долгоживущее состояние ОДНОЙ вкладки (в ClientState)
-  ScrollbackOutputCore.kt  портируемое ядро: маппинг seq↔px, OutputCanvas, OutputScrollbar
+  ScrollbackOutputCore.kt  портируемое ядро: маппинг seq↔px по строкам, OutputCanvas, OutputScrollbar
   DesktopOutputInput.kt  главный composable ScrollbackOutputView: измерение, ввод, рендер
   OutputSearchBar.kt     строка поиска (Ctrl+F)
 
@@ -126,7 +128,8 @@ maxScroll          = contentHeight - viewport
 scrollbackPx = anchorToPx(layout, plainText, firstSeq, anchorSeq, anchorCol) + anchorOffsetPx
 ```
 
-где `anchorToPx` = `getLineTop(getLineForOffset(offsetOf(seq,col)))`. Это держит
+где `anchorToPx` — найти строку по `seq`, в её собственной разметке взять
+`getLineTop(getLineForOffset(col))` и прибавить верх строки в стопке. Это держит
 ОДИН И ТОТ ЖЕ контент наверху, что бы ни менялось (см. камни №4, №5, №7).
 Если `followMode` — просто `scrollbackPx = maxScroll` (следуем за низом).
 
@@ -140,7 +143,8 @@ scrollbackPx = anchorToPx(layout, plainText, firstSeq, anchorSeq, anchorCol) + a
 Своя модель (`OutputSelection`), НЕ Compose `SelectionContainer` (камень №9):
 - выделение = пара `(seq, col)` anchor/focus по **всему буферу**, не зависит от
   панелей → переживает раздвоение/схлопывание и «разрыв» между панелями;
-- подсветка рисуется в `OutputCanvas` через `layout.getPathForRange(charRange)`;
+- подсветка рисуется в `OutputCanvas` по строкам: для каждой строки диапазона —
+  `getPathForRange` её разметки, сдвинутый на её верх (`pathForRange`);
 - drag-жест и сброс по клику объединены в один `awaitEachGesture` (камень №9);
 - копирование Ctrl+C/Cmd+C/Ctrl+Insert = `clipboard.setText(plain-подстрока)`.
 
@@ -156,9 +160,17 @@ scrollbackPx = anchorToPx(layout, plainText, firstSeq, anchorSeq, anchorCol) + a
 
 ## 7. Рендеринг (ключевое для производительности и багов)
 
-- `AnnotatedString` парсится один раз (`AnsiParser`), измеряется один раз через
-  `TextMeasurer` → общий `TextLayoutResult` для всех панелей (без двойного measure).
-- `OutputCanvas` рисует через `Canvas`/`drawText` + подсветки (`getPathForRange`).
+- `AnnotatedString` парсится один раз на окно (`AnsiParser`) и режется на
+  логические строки (`splitLines`); **разметка — у каждой строки своя**.
+  `LineLayoutCache` хранит её по абсолютному `seq` и размечает заново только
+  строки, чьё содержимое (текст и отрезки) изменилось — в норме одну, промпт.
+  Место строки по вертикали — сумма высот строк выше (`LineStack`). Все панели
+  читают одно окно (`MeasuredWindow`), без двойного measure.
+- Любой перевод «пиксель ↔ символ» — два шага: найти строку (по `y` или по
+  `seq`), затем спросить её разметку (`anchorToPx`, `pxToAnchor`,
+  `pointToSelPoint`, `pathForRange`, `pathForOffsets`).
+- `OutputCanvas` рисует через `Canvas`/`drawText` только строки, попавшие во
+  вьюпорт, каждую на своей высоте; подсветки — готовыми путями.
 - **Размер берётся через `onSizeChanged`, НЕ `BoxWithConstraints`** (камень №1).
 - **Скролл и ревизии выделения/поиска читаются в фазе draw** (`scrollProvider()`,
   `revisionState.value`) → Canvas перерисовывается при их изменении БЕЗ рекомпозиции
@@ -290,7 +302,19 @@ composable по тому же месту при переключении под-
 ### №12. ANSI и координаты
 ANSI-состояние (цвет) переносится между строками; парсим весь буфер сразу (per-line
 парсинг потерял бы перенос). Все offset/выделение/поиск — в координатах plain-текста
-(`AnnotatedString.text`), число строк plain==raw, столбцы в plain.
+(`AnnotatedString.text`), число строк plain==raw, столбцы в plain. Режем на строки
+уже размеченный результат: `AnnotatedString.subSequence` сохраняет отрезки.
+
+### №13. Разметка стоит по отрезкам, не по символам — и не переживает обновление
+Окно размечалось одним `TextLayoutResult` на каждое обновление: тысяча строк
+игры — 84 мс на каждый пришедший кусок, при том что 999 строк те же, что секунду
+назад. Те же строки **без цветов** укладывались в кадр: цена — в стилевых
+прогонах Skia, по одному на цветной отрезок, а их по несколько на строку.
+Отсюда задержка при ходьбе (#19): эхо команды и комната — два обновления,
+на слабой машине по 300 мс. **Решение:** разметка по строкам с кэшем по `seq`
+(`LineLayoutCache`); заново размечается только изменившееся. После починки
+разметка не вылезает за 5 мс; заметным остался разбор ANSI всего окна
+(5–14 мс на ~1000 строк) — следующий кандидат, если окно расти будет.
 
 ---
 
@@ -298,7 +322,7 @@ ANSI-состояние (цвет) переносится между строк�
 
 Чистая логика покрыта юнитами и НЕ требует ручной проверки:
 `OutputScrollControllerTest`, `BufferOffsetsTest`, `OutputSelectionTest`,
-`OutputSearchTest`, seq в `TabTest`. Непокрываемый зазор — пиксельная Compose-склейка
+`OutputSearchTest`, `LineStackTest`, `LineLayoutCacheTest`, seq в `TabTest`. Непокрываемый зазор — пиксельная Compose-склейка
 (рекомпозиция/жесты/измерения): её проверяют вручную (`./gradlew run`). Именно там
 жили все баги — поэтому склейка тонкая, а грабли выше задокументированы.
 
