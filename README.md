@@ -174,4 +174,4 @@ plugins/                 # Отдельные модули Gradle
 
 ## Лицензия
 
-MIT
+[MIT](LICENSE)
