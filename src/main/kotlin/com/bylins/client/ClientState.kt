@@ -341,6 +341,15 @@ class ClientState {
     val currentTheme: StateFlow<String> = _currentTheme
 
     // Настройки шрифта
+    /**
+     * Разрешены ли в настройках шрифты, установленные в системе.
+     *
+     * Выключено -- список прежний, четыре логических семейства. Включено -- в списке ещё и
+     * моноширинные шрифты машины, а в конфиг попадает имя шрифта ("Lucida Console").
+     */
+    private val _allowSystemFonts = MutableStateFlow(false)
+    val allowSystemFonts: StateFlow<Boolean> = _allowSystemFonts
+
     private val _fontFamily = MutableStateFlow("MONOSPACE")
     val fontFamily: StateFlow<String> = _fontFamily
 
@@ -750,6 +759,7 @@ class ClientState {
 
         // Загружаем настройки шрифта из конфига
         _fontFamily.value = configData.fontFamily
+        _allowSystemFonts.value = configData.allowSystemFonts
         _fontSize.value = configData.fontSize
         _ignoreNumLock.value = configData.ignoreNumLock
         // Постоянные вкладки не могут быть скрыты даже через конфиг
@@ -1936,6 +1946,7 @@ class ClientState {
             zonePanelWidth = _zonePanelWidth.value,
             theme = _currentTheme.value,
             fontFamily = _fontFamily.value,
+            allowSystemFonts = _allowSystemFonts.value,
             fontSize = _fontSize.value,
             connectionProfiles = _connectionProfiles.value,
             currentProfileId = _currentProfileId.value,
@@ -1997,6 +2008,12 @@ class ClientState {
         _currentTheme.value = themeName
         saveConfig()
         logger.info { "Theme changed to: $themeName" }
+    }
+
+    fun setAllowSystemFonts(allow: Boolean) {
+        if (_allowSystemFonts.value == allow) return
+        _allowSystemFonts.value = allow
+        saveConfig()
     }
 
     /**
@@ -2196,6 +2213,7 @@ class ClientState {
 
         // Загружаем настройки шрифта
         _fontFamily.value = configData.fontFamily
+        _allowSystemFonts.value = configData.allowSystemFonts
         _fontSize.value = configData.fontSize
 
         // Загружаем настройку логирования цветов

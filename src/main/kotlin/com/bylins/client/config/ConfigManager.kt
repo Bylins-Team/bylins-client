@@ -114,6 +114,7 @@ class ConfigManager {
         zonePanelWidth: Int = 220,
         theme: String = "DARK",
         fontFamily: String = "MONOSPACE",
+        allowSystemFonts: Boolean = false,
         fontSize: Int = 14,
         connectionProfiles: List<com.bylins.client.connection.ConnectionProfile> = emptyList(),
         currentProfileId: String? = null,
@@ -145,6 +146,7 @@ class ConfigManager {
                 zonePanelWidth = zonePanelWidth,
                 theme = theme,
                 fontFamily = fontFamily,
+                allowSystemFonts = allowSystemFonts,
                 fontSize = fontSize,
                 connectionProfiles = connectionProfiles.map { ConnectionProfileDto.fromConnectionProfile(it) },
                 currentProfileId = currentProfileId,
@@ -220,6 +222,7 @@ class ConfigManager {
             val zonePanelWidth = config.zonePanelWidth
             val theme = config.theme
             val fontFamily = config.fontFamily
+            val allowSystemFonts = config.allowSystemFonts
             val fontSize = config.fontSize
             val connectionProfiles = config.connectionProfiles.map { it.toConnectionProfile() }.ifEmpty {
                 com.bylins.client.connection.ConnectionProfile.createDefaultProfiles()
@@ -257,6 +260,7 @@ class ConfigManager {
                 zonePanelWidth = zonePanelWidth,
                 theme = theme,
                 fontFamily = fontFamily,
+                allowSystemFonts = allowSystemFonts,
                 fontSize = fontSize,
                 connectionProfiles = connectionProfiles,
                 currentProfileId = currentProfileId,
@@ -390,6 +394,7 @@ data class ConfigData(
     val zonePanelWidth: Int = 220,
     val theme: String = "DARK",
     val fontFamily: String = "MONOSPACE",
+    val allowSystemFonts: Boolean = false,
     val fontSize: Int = 14,
     val connectionProfiles: List<com.bylins.client.connection.ConnectionProfile> = emptyList(),
     val currentProfileId: String? = null,

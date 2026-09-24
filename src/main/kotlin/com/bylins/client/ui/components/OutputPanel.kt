@@ -278,12 +278,5 @@ fun OutputPanel(
 /**
  * Преобразует строковое название семейства шрифтов в FontFamily
  */
-private fun getFontFamily(familyName: String): FontFamily {
-    return when (familyName) {
-        "MONOSPACE" -> FontFamily.Monospace
-        "SERIF" -> FontFamily.Serif
-        "SANS_SERIF" -> FontFamily.SansSerif
-        "CURSIVE" -> FontFamily.Cursive
-        else -> FontFamily.Monospace
-    }
-}
+private fun getFontFamily(familyName: String): FontFamily =
+    com.bylins.client.ui.fonts.SystemFonts.resolve(familyName)
