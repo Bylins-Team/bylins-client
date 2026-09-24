@@ -236,7 +236,8 @@ fun ScrollbackOutputView(
                 }
             }
 
-            val scrollbackPx = holder.scrollbackScrollPx.coerceIn(0f, maxScroll)
+            val scrollbackPx =
+                scrollbackPositionOf(controller.followMode, holder.scrollbackScrollPx, maxScroll)
             // Раздвоение (видимость разделителя) выводим прямо из позиции скролла:
             // скроллбэк не у самого низа ⇒ есть разрыв с живым хвостом.
             val split = !isEmpty && scrollbackPx < maxScroll - lineHeightPx
@@ -249,7 +250,9 @@ fun ScrollbackOutputView(
             }
             val revisionState = holder.selectionRevisionState
             // Провайдер позиции скроллбэка (верхняя панель) — читается в фазе draw
-            val scrollbackProvider: () -> Float = { holder.scrollbackScrollPx.coerceIn(0f, maxScroll) }
+            val scrollbackProvider: () -> Float = {
+                scrollbackPositionOf(controller.followMode, holder.scrollbackScrollPx, maxScroll)
+            }
 
             // --- Поиск: подсветка совпадений (в фазе draw) ---
             val searchRevisionState = holder.searchRevisionState

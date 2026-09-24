@@ -40,6 +40,17 @@ internal fun maxScrollOf(contentHeightPx: Float, viewportPx: Float): Float =
     (contentHeightPx - viewportPx).coerceAtLeast(0f)
 
 /**
+ * Где стоит скроллбэк прямо сейчас.
+ *
+ * В режиме следования -- по определению в самом конце, и брать сохранённое значение
+ * нельзя: пришедшие строки увеличивают [maxScroll] в этой же композиции, а сохранённое
+ * обновится только следующим кадром. Один кадр панель считала бы, что скроллбэк отстал
+ * от хвоста, и показывала раздвоение -- при каждом приходе текста мигал разделитель.
+ */
+internal fun scrollbackPositionOf(followMode: Boolean, savedPx: Float, maxScroll: Float): Float =
+    if (followMode) maxScroll else savedPx.coerceIn(0f, maxScroll)
+
+/**
  * Сколько визуальных строк займёт текст в [columns] символов шириной —
  * оценка высоты строки, которую не размечали.
  *
