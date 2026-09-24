@@ -1,6 +1,7 @@
 package com.bylins.client.tabs
 
-import com.bylins.client.ui.scroll.ContentSnapshot
+import com.bylins.client.ui.scroll.LineBuffer
+import com.bylins.client.ui.scroll.LineSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
@@ -23,52 +24,30 @@ data class Tab(
     // сервера времени нет
     val timestamps: Boolean = false
 ) {
-    private val _content = MutableStateFlow("")
-    val content: StateFlow<String> = _content
-
-    // Снимок с абсолютной нумерацией строк (для логики автоскролла/выделения)
-    private val _snapshot = MutableStateFlow(ContentSnapshot.EMPTY)
-    val snapshot: StateFlow<ContentSnapshot> = _snapshot
+    // Снимок буфера по строкам с абсолютной нумерацией (для автоскролла и выделения)
+    private val _snapshot = MutableStateFlow(LineSnapshot.EMPTY)
+    val snapshot: StateFlow<LineSnapshot> = _snapshot
 
     // Индикатор непрочитанных сообщений (для неактивных вкладок)
     private val _hasUnreadMessages = MutableStateFlow(false)
     val hasUnreadMessages: StateFlow<Boolean> = _hasUnreadMessages
 
-    private val lines = mutableListOf<String>()
+    private val buffer = LineBuffer(maxLines)
 
     // Во вкладку пишут разные потоки: читающий сокет раскладывает вывод сервера,
     // плагины (в том числе команды ИИ) добавляют свой текст из своих потоков.
     // Без замка параллельные правки списка теряют строки или ломают его.
     private val linesLock = Any()
 
-    // Сколько строк уже вытеснено из начала буфера (скользящее окно).
-    // Даёт абсолютный seq первой строки буфера; монотонно растёт.
-    private var evictedLines: Long = 0L
-
-    // Счётчик для оптимизации обновлений
-    private var updateCounter = 0
-
     /**
      * Добавляет текст во вкладку
      * @param markUnread если true, помечает вкладку как имеющую непрочитанные сообщения
      */
     fun appendText(text: String, markUnread: Boolean = false) = synchronized(linesLock) {
-        // Разбиваем на строки
-        val newLines = text.split("\n")
-
-        // Добавляем новые строки
-        for (line in newLines) {
-            if (line.isEmpty() && lines.isNotEmpty() && lines.last().isEmpty()) {
-                // Пропускаем дублирующиеся пустые строки
-                continue
-            }
-            lines.add(line)
-        }
-
-        // Ограничиваем количество строк (вытесняем из начала, считаем вытесненные)
-        while (lines.size > maxLines) {
-            lines.removeAt(0)
-            evictedLines++
+        for (line in text.split("\n")) {
+            // Пропускаем дублирующиеся пустые строки
+            if (line.isEmpty() && buffer.lastLine?.isEmpty() == true) continue
+            buffer.addLine(line)
         }
 
         // Помечаем непрочитанные сообщения
@@ -76,44 +55,20 @@ data class Tab(
             _hasUnreadMessages.value = true
         }
 
-        // Обновляем содержимое только каждые N добавлений или если буфер большой
-        // Увеличен интервал обновления для экономии памяти (меньше создаётся строк)
-        updateCounter++
-        if (updateCounter >= 50 || lines.size > maxLines * 0.95) {
-            updateCounter = 0
-            publish()
-        }
+        // Снимок — копия ссылок на строки, дешёвая: публикуем на каждое добавление
+        _snapshot.value = buffer.snapshot()
     }
 
-    /**
-     * Принудительно обновляет содержимое (для немедленного отображения)
-     */
-    fun flush() = synchronized(linesLock) {
-        if (updateCounter > 0) {
-            updateCounter = 0
-            publish()
-        }
-    }
+    /** Весь текст вкладки одной строкой — для сохранения лога, не для показа. */
+    fun contentText(): String = _snapshot.value.text()
 
     /**
      * Очищает содержимое вкладки
      */
     fun clear() = synchronized(linesLock) {
-        // Сохраняем монотонность seq: считаем очищенные строки вытесненными
-        evictedLines += lines.size
-        lines.clear()
-        _content.value = ""
-        _snapshot.value = ContentSnapshot("", evictedLines, 0)
-        updateCounter = 0
-    }
-
-    /**
-     * Публикует текущее содержимое в content и snapshot согласованно
-     */
-    private fun publish() {
-        val text = lines.joinToString("\n")
-        _content.value = text
-        _snapshot.value = ContentSnapshot(text, evictedLines, lines.size)
+        // Сохраняем монотонность seq: очищенные строки считаются вытесненными
+        buffer.clear()
+        _snapshot.value = buffer.snapshot()
     }
 
     /**
@@ -245,7 +200,6 @@ data class TabDto(
         // Восстанавливаем содержимое
         if (!content.isNullOrEmpty()) {
             tab.appendText(content)
-            tab.flush()
         }
         return tab
     }
@@ -262,7 +216,7 @@ data class TabDto(
                 // лог глобальной вкладки лежит в profile.tabLogs). Для профильной вкладки
                 // (profileTab) её лог хранится здесь же, в её TabDto внутри профиля.
                 content = if (tab.persistContent && (tab.profileTab || !tab.profileLog))
-                    tab.content.value.takeIf { it.isNotEmpty() } else null,
+                    tab.contentText().takeIf { it.isNotEmpty() } else null,
                 profileTab = tab.profileTab,
                 profileLog = tab.profileLog,
                 persistContent = tab.persistContent,

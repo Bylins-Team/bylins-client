@@ -15,11 +15,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import com.bylins.client.ui.scroll.MeasuredWindow
+import com.bylins.client.ui.scroll.SearchMatch
 import com.bylins.client.ui.scroll.SelPoint
 
 /**
@@ -29,8 +28,9 @@ import com.bylins.client.ui.scroll.SelPoint
  * Разметка — по строкам (см. [MeasuredWindow]): у каждой логической строки
  * свой TextLayoutResult, а её место по вертикали — сумма высот строк выше.
  * Поэтому любой перевод «пиксель ↔ символ» — это два шага: найти строку по
- * вертикали или номеру, затем спросить её собственную разметку.
- * Использует только multiplatform-API Compose (без desktop-специфики).
+ * вертикали или номеру, затем спросить её собственную разметку. Разметка
+ * есть только у строк около вьюпорта; кому нужна другая — размечается на
+ * месте, по одной. Использует только multiplatform-API Compose.
  */
 
 internal typealias TextWindow = MeasuredWindow<TextLayoutResult>
@@ -40,105 +40,51 @@ internal fun maxScrollOf(contentHeightPx: Float, viewportPx: Float): Float =
     (contentHeightPx - viewportPx).coerceAtLeast(0f)
 
 /**
- * Разбивает размеченное окно на логические строки, сохраняя раскраску.
+ * Сколько визуальных строк займёт текст в [columns] символов шириной —
+ * оценка высоты строки, которую не размечали.
  *
- * Разбор ANSI идёт по всему окну сразу — цвет переносится между строками
- * (камень №12), — а режется уже результат. Строк ровно столько, сколько
- * даёт countLines: текст с завершающим переводом строки заканчивается
- * пустой строкой.
- *
- * Не через `subSequence`: тот на каждый срез перебирает ВСЕ отрезки окна,
- * и на ста тысячах строк с четырьмя сотнями тысяч отрезков UI-поток ушёл
- * в это на девять минут (камень №14). Здесь отрезки, отсортированные по
- * началу, проходятся один раз вместе со строками: отрезок посещается
- * столько раз, сколько строк он задевает.
+ * Перенос по словам, как у разметки: длинное слово рвётся по ширине.
+ * Для моноширинного шрифта совпадает с разметкой, для пропорционального —
+ * близко; точная высота встаёт, когда строка доезжает до вьюпорта.
  */
-internal fun splitLines(annotated: AnnotatedString): List<AnnotatedString> {
-    val text = annotated.text
-    if (text.isEmpty()) return emptyList()
-    val spans = annotated.spanStyles.sortedBy { it.start }
-    val lines = ArrayList<AnnotatedString>()
-    var spanIndex = 0
-    var start = 0
-    while (true) {
-        val newline = text.indexOf('\n', start)
-        val end = if (newline == -1) text.length else newline
-        // Отрезки, закончившиеся до этой строки, больше не понадобятся
-        while (spanIndex < spans.size && spans[spanIndex].end <= start) spanIndex++
-        lines.add(
-            buildAnnotatedString {
-                append(text, start, end)
-                var j = spanIndex
-                while (j < spans.size && spans[j].start < end) {
-                    val span = spans[j]
-                    val from = maxOf(span.start, start) - start
-                    val to = minOf(span.end, end) - start
-                    if (to > from) addStyle(span.item, from, to)
-                    j++
-                }
-            }
-        )
-        if (newline == -1) return lines
-        start = newline + 1
+internal fun estimateVisualLines(text: CharSequence, columns: Int): Int {
+    val width = columns.coerceAtLeast(1)
+    if (text.length <= width) return 1
+    var lines = 1
+    var lineStart = 0
+    var lastSpace = -1
+    var i = 0
+    while (i < text.length) {
+        if (text[i] == ' ') lastSpace = i
+        if (i - lineStart >= width) {
+            // Есть где перенести по слову — переносим там, иначе рвём слово
+            lineStart = if (lastSpace > lineStart) lastSpace + 1 else i
+            lastSpace = -1
+            lines++
+        }
+        i++
     }
-}
-
-/** Последние [maxLines] строк текста (окно разбора для больших буферов). */
-internal fun lastLines(text: String, maxLines: Int): String {
-    if (text.isEmpty()) return text
-    var lineCount = 0
-    var position = text.length - 1
-    while (position >= 0 && lineCount < maxLines) {
-        if (text[position] == '\n') lineCount++
-        position--
-    }
-    if (position < 0) return text
-    return text.substring(position + 1)
-}
-
-/** Смещение начала каждой логической строки в plain-тексте окна. */
-internal fun lineStarts(plainText: String): IntArray {
-    if (plainText.isEmpty()) return IntArray(0)
-    var count = 1
-    for (ch in plainText) if (ch == '\n') count++
-    val starts = IntArray(count)
-    var line = 1
-    for (i in plainText.indices) {
-        if (plainText[i] == '\n') starts[line++] = i + 1
-    }
-    return starts
-}
-
-/** Индекс логической строки, содержащей смещение [offset] (последнее начало <= offset). */
-internal fun lineIndexOf(lineStarts: IntArray, offset: Int): Int {
-    if (lineStarts.isEmpty()) return 0
-    var low = 0
-    var high = lineStarts.size - 1
-    while (low < high) {
-        val mid = (low + high + 1) ushr 1
-        if (lineStarts[mid] <= offset) low = mid else high = mid - 1
-    }
-    return low
+    return lines
 }
 
 /** Точный пиксель верха визуальной строки, содержащей символ (seq, col). Без «защёлкивания»
  *  к началу логической строки — поэтому нет дрожи на переносах. */
 internal fun TextWindow.anchorToPx(seq: Long, col: Int): Float {
     if (isEmpty) return 0f
-    val line = lines[indexOfSeq(seq)]
+    val index = indexOfSeq(seq)
+    val layout = layoutOrMeasure(index)
     // Вытесненная строка подтягивается к началу окна, как и в модели выделения
-    val offset = if (seq < firstSeq) 0 else col.coerceIn(0, line.length)
-    val visualLine = line.layout.getLineForOffset(offset)
-    return line.top + line.layout.getLineTop(visualLine)
+    val offset = if (seq < firstSeq) 0 else col.coerceIn(0, lengthOf(index))
+    return topOf(index) + layout.getLineTop(layout.getLineForOffset(offset))
 }
 
 /** Якорь (seq, col) символа в левом-верхнем углу вьюпорта при сдвиге [scrollPx]. */
 internal fun TextWindow.pxToAnchor(scrollPx: Float): Pair<Long, Int> {
     if (isEmpty) return firstSeq to 0
     val index = indexAt(scrollPx)
-    val line = lines[index]
-    val localY = (scrollPx - line.top).coerceAtLeast(0f)
-    val offset = line.layout.getOffsetForPosition(Offset(0f, localY)).coerceIn(0, line.length)
+    val layout = layoutOrMeasure(index)
+    val localY = (scrollPx - topOf(index)).coerceAtLeast(0f)
+    val offset = layout.getOffsetForPosition(Offset(0f, localY)).coerceIn(0, lengthOf(index))
     return (firstSeq + index) to offset
 }
 
@@ -146,65 +92,58 @@ internal fun TextWindow.pxToAnchor(scrollPx: Float): Pair<Long, Int> {
 internal fun TextWindow.pointToSelPoint(contentX: Float, contentY: Float): SelPoint {
     if (isEmpty) return SelPoint(firstSeq, 0)
     val index = indexAt(contentY)
-    val line = lines[index]
-    val localY = (contentY - line.top).coerceAtLeast(0f)
-    val offset = line.layout.getOffsetForPosition(Offset(contentX, localY)).coerceIn(0, line.length)
+    val layout = layoutOrMeasure(index)
+    val localY = (contentY - topOf(index)).coerceAtLeast(0f)
+    val offset = layout.getOffsetForPosition(Offset(contentX, localY)).coerceIn(0, lengthOf(index))
     return SelPoint(firstSeq + index, offset)
 }
 
 /**
  * Путь подсветки диапазона (seq, col) → (seq, col) — по строкам, каждая
- * своей разметкой на своей высоте. Столбцы зажимаются по длине строки, номера
- * — по окну: выделение может начинаться в вытесненной строке.
+ * своей разметкой на своей высоте, но только для строк с индексами от
+ * [fromIndex] до [toIndex]: подсвечивать невидимое незачем, а выделение
+ * «всего» на ста тысячах строк размечало бы их все. Столбцы зажимаются
+ * по длине строки, номера — по окну: выделение может начинаться в
+ * вытесненной строке.
  *
  * @return null, если подсвечивать нечего
  */
-internal fun TextWindow.pathForRange(startSeq: Long, startCol: Int, endSeq: Long, endCol: Int): Path? {
+internal fun TextWindow.pathForRange(
+    startSeq: Long, startCol: Int, endSeq: Long, endCol: Int,
+    fromIndex: Int = 0, toIndex: Int = lineCount - 1
+): Path? {
     if (isEmpty) return null
-    val from = maxOf(startSeq, firstSeq)
-    val to = minOf(endSeq, lastSeq)
+    val from = maxOf(startSeq, firstSeq, firstSeq + fromIndex.coerceAtLeast(0))
+    val to = minOf(endSeq, lastSeq, firstSeq + toIndex.coerceAtMost(lineCount - 1))
     if (from > to) return null
     var path: Path? = null
     for (seq in from..to) {
-        val line = lines[(seq - firstSeq).toInt()]
-        val s = if (seq == startSeq) startCol.coerceIn(0, line.length) else 0
-        val e = if (seq == endSeq) endCol.coerceIn(0, line.length) else line.length
+        val index = (seq - firstSeq).toInt()
+        val length = lengthOf(index)
+        val s = if (seq == startSeq) startCol.coerceIn(0, length) else 0
+        val e = if (seq == endSeq) endCol.coerceIn(0, length) else length
         if (e <= s) continue
-        val segment = line.layout.getPathForRange(s, e)
-        segment.translate(Offset(0f, line.top))
+        val segment = layoutOrMeasure(index).getPathForRange(s, e)
+        segment.translate(Offset(0f, topOf(index)))
         (path ?: Path().also { path = it }).addPath(segment)
     }
     return path
 }
 
-/**
- * Путь подсветки для диапазона смещений в plain-тексте окна (совпадение поиска).
- * Полуинтервал [startOffset, endOffset) может пересекать границу строк.
- */
-internal fun TextWindow.pathForOffsets(lineStarts: IntArray, startOffset: Int, endOffset: Int): Path? {
-    if (isEmpty || endOffset <= startOffset || lineStarts.isEmpty()) return null
-    val first = lineIndexOf(lineStarts, startOffset)
-    val last = lineIndexOf(lineStarts, endOffset - 1)
-    var path: Path? = null
-    for (index in first..minOf(last, lines.size - 1)) {
-        val line = lines[index]
-        val s = (startOffset - lineStarts[index]).coerceIn(0, line.length)
-        val e = (endOffset - lineStarts[index]).coerceIn(0, line.length)
-        if (e <= s) continue
-        val segment = line.layout.getPathForRange(s, e)
-        segment.translate(Offset(0f, line.top))
-        (path ?: Path().also { path = it }).addPath(segment)
-    }
-    return path
-}
+/** Путь подсветки совпадения поиска; null — вне окна или пустое. */
+internal fun TextWindow.pathForMatch(match: SearchMatch): Path? =
+    pathForRange(match.seq, match.start, match.seq, match.end)
 
 internal val SEARCH_ALL_COLOR = Color(0x66E6B800)     // все совпадения — приглушённый жёлтый
 internal val SEARCH_CURRENT_COLOR = Color(0xCCFF8C00)  // текущее — яркий оранжевый
 
 /**
  * Рисует одну панель-вьюпорт над окном строк: подсветки и текст, сдвинутые
- * на [scrollPx] и обрезанные границами панели. Рисуются только строки,
- * попавшие во вьюпорт, — остальные не стоят ничего.
+ * на [scrollPx] и обрезанные границами панели. Рисуются — и подсвечиваются
+ * — только строки, попавшие во вьюпорт: остальные не стоят ничего.
+ *
+ * Выделение и совпадения читаются в фазе draw через провайдеры: панель
+ * перерисовывается по ревизиям без рекомпозиции.
  */
 @Composable
 internal fun OutputCanvas(
@@ -213,9 +152,9 @@ internal fun OutputCanvas(
     selectionColor: Color,
     revisionState: State<Int>,
     searchRevisionState: State<Int>,
-    selectionPathProvider: () -> Path?,
-    searchAllProvider: () -> Path?,
-    searchCurrentProvider: () -> Path?,
+    selectionProvider: () -> Pair<SelPoint, SelPoint>?,
+    matchesProvider: (fromSeq: Long, toSeq: Long) -> List<SearchMatch>,
+    currentMatchProvider: () -> SearchMatch?,
     modifier: Modifier
 ) {
     Canvas(modifier) {
@@ -224,21 +163,28 @@ internal fun OutputCanvas(
         revisionState.value
         searchRevisionState.value
         val scrollPx = scrollProvider()
-        val selectionPath = selectionPathProvider()
-        val searchAll = searchAllProvider()
-        val searchCurrent = searchCurrentProvider()
+        if (window.isEmpty) return@Canvas
+        val from = window.indexAt(scrollPx)
+        val to = window.indexAt(scrollPx + size.height)
+        val fromSeq = window.firstSeq + from
+        val toSeq = window.firstSeq + to
         clipRect {
             translate(top = -scrollPx) {
-                if (searchAll != null) drawPath(searchAll, color = SEARCH_ALL_COLOR)
-                if (searchCurrent != null) drawPath(searchCurrent, color = SEARCH_CURRENT_COLOR)
-                if (selectionPath != null) drawPath(selectionPath, color = selectionColor)
-                if (!window.isEmpty) {
-                    val from = window.indexAt(scrollPx)
-                    val to = window.indexAt(scrollPx + size.height)
-                    for (index in from..to) {
-                        val line = window.lines[index]
-                        drawText(line.layout, topLeft = Offset(0f, line.top))
-                    }
+                val matches = matchesProvider(fromSeq, toSeq)
+                if (matches.isNotEmpty()) {
+                    val all = Path()
+                    for (match in matches) window.pathForMatch(match)?.let { all.addPath(it) }
+                    drawPath(all, color = SEARCH_ALL_COLOR)
+                }
+                currentMatchProvider()
+                    ?.takeIf { it.seq in fromSeq..toSeq }
+                    ?.let { window.pathForMatch(it) }
+                    ?.let { drawPath(it, color = SEARCH_CURRENT_COLOR) }
+                selectionProvider()
+                    ?.let { (a, b) -> window.pathForRange(a.seq, a.col, b.seq, b.col, from, to) }
+                    ?.let { drawPath(it, color = selectionColor) }
+                for (index in from..to) {
+                    drawText(window.layoutOrMeasure(index), topLeft = Offset(0f, window.topOf(index)))
                 }
             }
         }

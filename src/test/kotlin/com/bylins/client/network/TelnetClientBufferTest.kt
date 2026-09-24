@@ -35,7 +35,7 @@ class TelnetClientBufferTest {
         pool.shutdown()
         pool.awaitTermination(30, TimeUnit.SECONDS)
 
-        assertEquals(threads * perThread, lines(client.receivedData.value).size)
+        assertEquals(threads * perThread, lines(client.snapshot.value.text()).size)
     }
 
     @Test
@@ -57,7 +57,7 @@ class TelnetClientBufferTest {
         pool.shutdown()
         pool.awaitTermination(30, TimeUnit.SECONDS)
 
-        val text = client.receivedData.value
+        val text = client.snapshot.value.text()
         assertEquals(count, Regex("cmd-\\d+").findAll(text).count())
         assertEquals(count, Regex("out-\\d+").findAll(text).count())
     }
@@ -71,7 +71,7 @@ class TelnetClientBufferTest {
         client.addLocalOutput("#script call cycle")
         client.addLocalOutput("[атака] пнуть")
 
-        val text = client.receivedData.value
+        val text = client.snapshot.value.text()
         val commandAt = text.indexOf("#script call cycle")
         val resultAt = text.indexOf("[атака] пнуть")
         assertTrue(commandAt >= 0 && resultAt >= 0, "нет строк в буфере: $text")
@@ -84,7 +84,6 @@ class TelnetClientBufferTest {
         repeat(50) { i -> client.echoCommand("cmd-$i") }
 
         val snapshot = client.snapshot.value
-        assertEquals(client.receivedData.value, snapshot.text)
-        assertEquals(50, lines(snapshot.text).size)
+                assertEquals(50, lines(snapshot.text()).size)
     }
 }

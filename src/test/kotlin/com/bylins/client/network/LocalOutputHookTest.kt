@@ -55,7 +55,7 @@ class LocalOutputHookTest {
 
         client.addLocalOutput("привет")
 
-        assertTrue(client.receivedData.value.contains("привет"), "текст потерян из буфера")
+        assertTrue(client.snapshot.value.text().contains("привет"), "текст потерян из буфера")
         assertEquals(1, seen.size)
     }
 
@@ -67,6 +67,6 @@ class LocalOutputHookTest {
         client.echoCommand("смотреть")
         client.addToOutputRaw("текст")
 
-        assertTrue(client.receivedData.value.contains("привет"))
+        assertTrue(client.snapshot.value.text().contains("привет"))
     }
 }

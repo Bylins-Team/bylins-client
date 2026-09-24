@@ -22,8 +22,8 @@ import androidx.compose.ui.unit.sp
 import com.bylins.client.ClientState
 import com.bylins.client.OperatingSystem
 import com.bylins.client.config.MAX_CONFIG_BACKUPS
-import com.bylins.client.config.MAX_OUTPUT_BUFFER_MB
-import com.bylins.client.config.MAX_OUTPUT_WINDOW_LINES
+import com.bylins.client.config.MAX_OUTPUT_BUFFER_LINES
+import com.bylins.client.config.MIN_OUTPUT_BUFFER_LINES
 import com.bylins.client.PERMANENT_TAB_IDS
 import com.bylins.client.ui.theme.LocalAppColorScheme
 import com.bylins.client.ui.ALL_TABS
@@ -215,14 +215,13 @@ fun SettingsPanel(
 
                 Divider(color = colorScheme.divider, modifier = Modifier.padding(vertical = 8.dp))
 
-                // Глубина истории вывода. Платится задержкой: пока работа на
-                // каждый приход текста пропорциональна всему буферу, большой
-                // буфер прямо умножает паузу. Что именно дорого — видно в #perf
-                val outputBufferMb by clientState.outputBufferMb.collectAsState()
-                var bufferText by remember(outputBufferMb) { mutableStateOf(outputBufferMb.toString()) }
+                // Глубина истории вывода. Платится памятью, не задержкой:
+                // на приход текста работа идёт по изменившимся строкам
+                val outputBufferLines by clientState.outputBufferLines.collectAsState()
+                var bufferText by remember(outputBufferLines) { mutableStateOf(outputBufferLines.toString()) }
 
                 Text(
-                    text = "Буфер вывода",
+                    text = "История вывода",
                     color = colorScheme.onSurface,
                     fontSize = 13.sp,
                     fontFamily = FontFamily.Monospace
@@ -231,54 +230,8 @@ fun SettingsPanel(
                     OutlinedTextField(
                         value = bufferText,
                         onValueChange = { value ->
-                            bufferText = value.filter { it.isDigit() }.take(2)
-                            bufferText.toIntOrNull()?.let { clientState.setOutputBufferMb(it) }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(90.dp),
-                        textStyle = LocalTextStyle.current.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        colors = TextFieldDefaults.outlinedTextFieldColors(
-                            textColor = colorScheme.onSurface,
-                            backgroundColor = colorScheme.background,
-                            cursorColor = colorScheme.onSurface,
-                            focusedBorderColor = colorScheme.primary,
-                            unfocusedBorderColor = colorScheme.border
-                        )
-                    )
-                    Text(
-                        text = "МБ истории — это примерно ${outputBufferMb * 15} тысяч строк " +
-                            "(максимум $MAX_OUTPUT_BUFFER_MB). Чем больше, тем дороже каждое " +
-                            "обновление вывода: смотрите #perf",
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                }
-
-                Divider(color = colorScheme.divider, modifier = Modifier.padding(vertical = 8.dp))
-
-                // Глубина окна разметки: столько строк доступно прокруткой, поиском
-                // и выделением. Дорого не само окно, а разбор ANSI всем окном на
-                // каждое обновление — см. #perf
-                val outputWindowLines by clientState.outputWindowLines.collectAsState()
-                var windowText by remember(outputWindowLines) { mutableStateOf(outputWindowLines.toString()) }
-
-                Text(
-                    text = "Окно вывода",
-                    color = colorScheme.onSurface,
-                    fontSize = 13.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = windowText,
-                        onValueChange = { value ->
-                            windowText = value.filter { it.isDigit() }.take(7)
-                            windowText.toIntOrNull()?.let { clientState.setOutputWindowLines(it) }
+                            bufferText = value.filter { it.isDigit() }.take(7)
+                            bufferText.toIntOrNull()?.let { clientState.setOutputBufferLines(it) }
                         },
                         singleLine = true,
                         modifier = Modifier.width(110.dp),
@@ -295,8 +248,9 @@ fun SettingsPanel(
                         )
                     )
                     Text(
-                        text = "строк доступно прокруткой, поиском и выделением " +
-                            "(максимум $MAX_OUTPUT_WINDOW_LINES); ограничено размером буфера",
+                        text = "строк держится в памяти и доступно прокруткой, поиском и выделением " +
+                            "(от $MIN_OUTPUT_BUFFER_LINES до $MAX_OUTPUT_BUFFER_LINES). " +
+                            "Около килобайта на строку",
                         color = colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,

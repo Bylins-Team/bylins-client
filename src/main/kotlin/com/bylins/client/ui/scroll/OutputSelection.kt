@@ -12,8 +12,8 @@ data class SelPoint(val seq: Long, val col: Int)
  *
  * Выделение задаётся парой anchor/focus в координатах (seq, col) и не зависит
  * от того, раздвоено окно или нет, и от конкретных панелей — поэтому переживает
- * раздвоение/схлопывание во время drag. Перевод в символьный диапазон делается
- * относительно текущего firstSeq и видимого (plain) текста.
+ * раздвоение/схлопывание во время drag. Текст собирается по строкам буфера,
+ * какими их отдаёт панель.
  */
 class OutputSelection {
     var anchor: SelPoint? = null
@@ -57,27 +57,27 @@ class OutputSelection {
     }
 
     /**
-     * Диапазон выделения в символах [plainText] (видимый текст без ANSI).
-     * При вытеснении строки (seq < firstSeq) точка подтягивается к началу буфера.
+     * Текст выделения (включая скрытую «середину» при разрыве панелей).
+     *
+     * Строки — видимый текст без ANSI, по индексу от [firstSeq]. Выделение,
+     * начавшееся в вытесненной строке, подтягивается к началу буфера.
      */
-    fun charRange(firstSeq: Long, plainText: String): IntRange? {
-        val (min, max) = normalized() ?: return null
-        val startOff = pointToOffset(min, firstSeq, plainText)
-        val endOff = pointToOffset(max, firstSeq, plainText)
-        if (startOff >= endOff) return null
-        return startOff until endOff
-    }
-
-    /** Текст выделения (включая скрытую «середину» при разрыве панелей). */
-    fun copyText(firstSeq: Long, plainText: String): String {
-        val r = charRange(firstSeq, plainText) ?: return ""
-        return plainText.substring(r.first, r.last + 1)
-    }
-
-    private fun pointToOffset(p: SelPoint, firstSeq: Long, plainText: String): Int {
-        val lineIndex = (p.seq - firstSeq).toInt().coerceAtLeast(0)
-        val col = if (p.seq < firstSeq) 0 else p.col
-        return BufferOffsets.offsetOfLineCol(plainText, lineIndex, col)
+    fun copyText(firstSeq: Long, lineCount: Int, lineAt: (Int) -> CharSequence): String {
+        val (min, max) = normalized() ?: return ""
+        if (lineCount <= 0) return ""
+        val lastSeq = firstSeq + lineCount - 1
+        val from = maxOf(min.seq, firstSeq)
+        val to = minOf(max.seq, lastSeq)
+        if (from > to) return ""
+        val out = StringBuilder()
+        for (seq in from..to) {
+            val line = lineAt((seq - firstSeq).toInt())
+            val s = if (seq == min.seq) min.col.coerceIn(0, line.length) else 0
+            val e = if (seq == max.seq) max.col.coerceIn(0, line.length) else line.length
+            if (seq != from) out.append('\n')
+            out.append(line, s, e)
+        }
+        return out.toString()
     }
 
     private fun compare(a: SelPoint, b: SelPoint): Int =

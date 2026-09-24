@@ -381,38 +381,20 @@ class ClientState {
     }
 
     /**
-     * Сколько вывода держать в памяти, МБ.
+     * Сколько строк вывода держать в памяти.
      *
-     * Примерно 15 тысяч строк на мегабайт. Больше история — дороже каждое
-     * обновление: пока работа на приход текста пропорциональна всему буферу,
-     * настройка прямо умножает задержку. Видно это в `#perf`.
+     * Столько же доступно прокруткой, поиском и выделением. Разбор, разметка
+     * и поиск идут по строкам и заново только для изменившихся, так что
+     * глубина платится памятью, а не задержкой; что дорого — видно в `#perf`.
      */
-    private val _outputBufferMb = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_BUFFER_MB)
-    val outputBufferMb: StateFlow<Int> = _outputBufferMb
+    private val _outputBufferLines = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_BUFFER_LINES)
+    val outputBufferLines: StateFlow<Int> = _outputBufferLines
 
-    fun setOutputBufferMb(megabytes: Int) {
-        val value = megabytes.coerceIn(1, com.bylins.client.config.MAX_OUTPUT_BUFFER_MB)
-        if (_outputBufferMb.value == value) return
-        _outputBufferMb.value = value
-        telnetClient.setOutputBufferMb(value)
-        saveConfig()
-    }
-
-    /**
-     * Сколько последних строк буфера размечать под отрисовку.
-     *
-     * Столько же доступно прокруткой, поиском и выделением. Разметка идёт по
-     * строкам и заново только для изменившихся, так что сама по себе глубина
-     * почти ничего не стоит; всем окном идут разбор ANSI и разбиение на
-     * строки — их цену видно в `#perf`.
-     */
-    private val _outputWindowLines = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_WINDOW_LINES)
-    val outputWindowLines: StateFlow<Int> = _outputWindowLines
-
-    fun setOutputWindowLines(lines: Int) {
-        val value = lines.coerceIn(100, com.bylins.client.config.MAX_OUTPUT_WINDOW_LINES)
-        if (_outputWindowLines.value == value) return
-        _outputWindowLines.value = value
+    fun setOutputBufferLines(lines: Int) {
+        val value = lines.coerceIn(com.bylins.client.config.MIN_OUTPUT_BUFFER_LINES, com.bylins.client.config.MAX_OUTPUT_BUFFER_LINES)
+        if (_outputBufferLines.value == value) return
+        _outputBufferLines.value = value
+        telnetClient.setOutputBufferLines(value)
         saveConfig()
     }
 
@@ -465,7 +447,6 @@ class ClientState {
         private set
 
     val isConnected: StateFlow<Boolean> = telnetClient.isConnected
-    val receivedData: StateFlow<String> = telnetClient.receivedData
     // Снимок главной вкладки с абсолютной нумерацией строк (для панели вывода)
     val mainOutputSnapshot = telnetClient.snapshot
 
@@ -689,9 +670,8 @@ class ClientState {
         val configData = configManager.loadConfig()
         _pluginPermissions.value = configData.pluginPermissions
         _configBackups.value = configData.configBackups
-        _outputBufferMb.value = configData.outputBufferMb
-        telnetClient.setOutputBufferMb(configData.outputBufferMb)
-        _outputWindowLines.value = configData.outputWindowLines
+        _outputBufferLines.value = configData.outputBufferLines
+        telnetClient.setOutputBufferLines(configData.outputBufferLines)
 
         // Инициализируем скриптинг
         initializeScripting()
@@ -1922,8 +1902,7 @@ class ClientState {
             statusGroupCollapsed = _statusGroupCollapsed.value,
             sidePanelCollapsed = _sidePanelCollapsed.value,
             configBackups = _configBackups.value,
-            outputBufferMb = _outputBufferMb.value,
-            outputWindowLines = _outputWindowLines.value,
+            outputBufferLines = _outputBufferLines.value,
             pluginPermissions = _pluginPermissions.value,
             outputSplitFractions = getOutputSplitFractions()
         )
@@ -2954,7 +2933,6 @@ class ClientState {
                 if (tab != null) {
                     val isActive = tabManager.activeTabId.value == id
                     tab.appendText(text, markUnread = !isActive)
-                    tab.flush()
                 }
             },
             closeOutputTabFunc = { id ->

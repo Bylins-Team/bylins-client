@@ -10,50 +10,45 @@ class TabTest {
     @Test
     fun `tab starts with empty content`() {
         val tab = Tab(id = "test", name = "Test")
-        assertEquals("", tab.content.value)
+        assertEquals("", tab.snapshot.value.text())
     }
 
     @Test
     fun `appendText adds text to tab`() {
         val tab = Tab(id = "test", name = "Test")
         tab.appendText("Hello")
-        tab.flush()
 
-        assertEquals("Hello", tab.content.value)
+        assertEquals("Hello", tab.snapshot.value.text())
     }
 
     @Test
     fun `appendText handles multiple lines`() {
         val tab = Tab(id = "test", name = "Test")
         tab.appendText("Line1\nLine2")
-        tab.flush()
 
-        assertTrue(tab.content.value.contains("Line1"))
-        assertTrue(tab.content.value.contains("Line2"))
+        assertTrue(tab.snapshot.value.text().contains("Line1"))
+        assertTrue(tab.snapshot.value.text().contains("Line2"))
     }
 
     @Test
-    fun `flush updates content immediately`() {
+    fun `content is published immediately`() {
         val tab = Tab(id = "test", name = "Test")
         tab.appendText("First")
-        tab.flush()
 
-        assertEquals("First", tab.content.value)
+        assertEquals("First", tab.snapshot.value.text())
 
         tab.appendText("Second")
-        tab.flush()
 
-        assertTrue(tab.content.value.contains("Second"))
+        assertTrue(tab.snapshot.value.text().contains("Second"))
     }
 
     @Test
     fun `clear removes all content`() {
         val tab = Tab(id = "test", name = "Test")
         tab.appendText("Some content")
-        tab.flush()
         tab.clear()
 
-        assertEquals("", tab.content.value)
+        assertEquals("", tab.snapshot.value.text())
     }
 
     @Test
@@ -63,9 +58,8 @@ class TabTest {
         for (i in 1..10) {
             tab.appendText("Line $i")
         }
-        tab.flush()
 
-        val lines = tab.content.value.lines()
+        val lines = tab.snapshot.value.text().lines()
         assertTrue(lines.size <= 5)
     }
 
@@ -139,9 +133,8 @@ class TabTest {
     fun `consecutive empty lines are skipped`() {
         val tab = Tab(id = "test", name = "Test")
         tab.appendText("Line1\n\n\n\nLine2")
-        tab.flush()
 
-        val content = tab.content.value
+        val content = tab.snapshot.value.text()
         // Should not have multiple consecutive empty lines
         assertTrue(!content.contains("\n\n\n"))
     }
@@ -153,7 +146,7 @@ class TabSnapshotTest {
     fun `snapshot is empty before any append`() {
         val tab = Tab(id = "test", name = "Test")
         val snap = tab.snapshot.value
-        assertEquals("", snap.text)
+        assertEquals("", snap.text())
         assertEquals(0L, snap.firstSeq)
         assertEquals(0, snap.lineCount)
     }
@@ -162,11 +155,9 @@ class TabSnapshotTest {
     fun `snapshot reflects text firstSeq and lineCount after append`() {
         val tab = Tab(id = "test", name = "Test")
         tab.appendText("a\nb\nc")
-        tab.flush()
 
         val snap = tab.snapshot.value
-        assertEquals(tab.content.value, snap.text)
-        assertEquals(0L, snap.firstSeq)
+                assertEquals(0L, snap.firstSeq)
         assertEquals(3, snap.lineCount)
     }
 
@@ -174,7 +165,6 @@ class TabSnapshotTest {
     fun `firstSeq is zero while buffer is under maxLines`() {
         val tab = Tab(id = "test", name = "Test", maxLines = 100)
         for (i in 1..10) tab.appendText("Line $i")
-        tab.flush()
 
         assertEquals(0L, tab.snapshot.value.firstSeq)
         assertEquals(10, tab.snapshot.value.lineCount)
@@ -184,7 +174,6 @@ class TabSnapshotTest {
     fun `firstSeq increments by number of evicted lines`() {
         val tab = Tab(id = "test", name = "Test", maxLines = 5)
         for (i in 1..10) tab.appendText("Line $i")
-        tab.flush()
 
         val snap = tab.snapshot.value
         assertEquals(5, snap.lineCount)
@@ -196,11 +185,10 @@ class TabSnapshotTest {
     fun `clear keeps seq monotonic`() {
         val tab = Tab(id = "test", name = "Test")
         tab.appendText("a\nb\nc")
-        tab.flush()
         tab.clear()
 
         val snap = tab.snapshot.value
-        assertEquals("", snap.text)
+        assertEquals("", snap.text())
         assertEquals(0, snap.lineCount)
         assertEquals(3L, snap.firstSeq) // 3 строки «вытеснены» очисткой
     }
@@ -235,7 +223,7 @@ class TabDtoTest {
 
         val tab = dto.toTab()
 
-        assertEquals("Saved content", tab.content.value)
+        assertEquals("Saved content", tab.snapshot.value.text())
     }
 
     @Test
@@ -248,7 +236,6 @@ class TabDtoTest {
             persistContent = true
         )
         tab.appendText("Some content")
-        tab.flush()
 
         val dto = TabDto.fromTab(tab)
 
@@ -266,7 +253,6 @@ class TabDtoTest {
         // в общий конфиг и появлялся на других серверах
         val tab = Tab(id = "test", name = "Test Tab")
         tab.appendText("Some content")
-        tab.flush()
 
         assertNull(TabDto.fromTab(tab).content)
     }
@@ -282,7 +268,6 @@ class TabDtoTest {
             persistContent = true
         )
         tab.appendText("Some content")
-        tab.flush()
 
         assertNull(TabDto.fromTab(tab).content)
     }
@@ -298,7 +283,6 @@ class TabDtoTest {
             persistContent = true
         )
         tab.appendText("Some content")
-        tab.flush()
 
         assertEquals("Some content", TabDto.fromTab(tab).content)
     }
