@@ -22,8 +22,8 @@ class CommandHistoryTest {
             add("смотреть")
             add("север")
         }
-        // Запись идёт в своём потоке -- ждём, пока файл появится
-        waitForLines(file, 2)
+        // Запись идёт в своём потоке -- ждём, пока в файле окажется ожидаемое
+        waitForContent(file, listOf("смотреть", "север"))
 
         val restored = CommandHistory(file = file)
         assertEquals(listOf("смотреть", "север"), restored.all())
@@ -58,9 +58,9 @@ class CommandHistoryTest {
         val history = CommandHistory(maxSize = 3, file = file)
         for (i in 1..5) history.add("команда $i")
 
-        assertEquals(listOf("команда 3", "команда 4", "команда 5"), history.all())
-        waitForLines(file, 3)
-        assertEquals(listOf("команда 3", "команда 4", "команда 5"), Files.readAllLines(file))
+        val expected = listOf("команда 3", "команда 4", "команда 5")
+        assertEquals(expected, history.all())
+        waitForContent(file, expected)
     }
 
     @Test
@@ -68,13 +68,13 @@ class CommandHistoryTest {
         val file = tempFile()
         val history = CommandHistory(maxSize = 5, file = file)
         for (i in 1..5) history.add("команда $i")
-        waitForLines(file, 5)
+        waitForContent(file, (1..5).map { "команда $it" })
 
         history.maxSize = 2
 
-        assertEquals(listOf("команда 4", "команда 5"), history.all())
-        waitForLines(file, 2)
-        assertEquals(listOf("команда 4", "команда 5"), Files.readAllLines(file))
+        val expected = listOf("команда 4", "команда 5")
+        assertEquals(expected, history.all())
+        waitForContent(file, expected)
     }
 
     @Test
@@ -99,12 +99,21 @@ class CommandHistoryTest {
         )
     }
 
-    private fun waitForLines(file: Path, expected: Int) {
+    /**
+     * Ждёт в файле именно ожидаемое содержимое, а не количество строк.
+     *
+     * По количеству ждать нельзя: пока история ещё дописывается, промежуточное состояние
+     * может совпасть по длине с конечным (три команды до обрезки -- и три после), и на
+     * загруженной машине проверка ловила как раз его.
+     */
+    private fun waitForContent(file: Path, expected: List<String>) {
         val deadline = System.currentTimeMillis() + 5000
+        var last: List<String> = emptyList()
         while (System.currentTimeMillis() < deadline) {
-            if (Files.exists(file) && Files.readAllLines(file).size == expected) return
+            last = if (Files.exists(file)) Files.readAllLines(file) else emptyList()
+            if (last == expected) return
             Thread.sleep(20)
         }
-        throw AssertionError("файл истории так и не получил $expected строк")
+        assertEquals(expected, last, "файл истории так и не получил ожидаемое содержимое")
     }
 }
