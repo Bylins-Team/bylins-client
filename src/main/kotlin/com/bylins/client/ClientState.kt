@@ -341,6 +341,15 @@ class ClientState {
     val currentTheme: StateFlow<String> = _currentTheme
 
     // Настройки шрифта
+    /**
+     * Разрешены ли в настройках шрифты, установленные в системе.
+     *
+     * Выключено -- список прежний, четыре логических семейства. Включено -- в списке ещё и
+     * моноширинные шрифты машины, а в конфиг попадает имя шрифта ("Lucida Console").
+     */
+    private val _allowSystemFonts = MutableStateFlow(false)
+    val allowSystemFonts: StateFlow<Boolean> = _allowSystemFonts
+
     private val _fontFamily = MutableStateFlow("MONOSPACE")
     val fontFamily: StateFlow<String> = _fontFamily
 
@@ -2000,15 +2009,6 @@ class ClientState {
         saveConfig()
         logger.info { "Theme changed to: $themeName" }
     }
-
-    /**
-     * Разрешены ли в настройках шрифты, установленные в системе.
-     *
-     * Выключено -- список прежний, четыре логических семейства. Включено -- в списке ещё и
-     * моноширинные шрифты машины, а в конфиг попадает имя шрифта ("Lucida Console").
-     */
-    private val _allowSystemFonts = MutableStateFlow(false)
-    val allowSystemFonts: StateFlow<Boolean> = _allowSystemFonts
 
     fun setAllowSystemFonts(allow: Boolean) {
         if (_allowSystemFonts.value == allow) return
