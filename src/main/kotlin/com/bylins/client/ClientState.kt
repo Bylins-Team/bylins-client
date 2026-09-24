@@ -398,6 +398,24 @@ class ClientState {
         saveConfig()
     }
 
+    /**
+     * Сколько последних строк буфера размечать под отрисовку.
+     *
+     * Столько же доступно прокруткой, поиском и выделением. Разметка идёт по
+     * строкам и заново только для изменившихся, так что сама по себе глубина
+     * почти ничего не стоит; всем окном идут разбор ANSI и разбиение на
+     * строки — их цену видно в `#perf`.
+     */
+    private val _outputWindowLines = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_WINDOW_LINES)
+    val outputWindowLines: StateFlow<Int> = _outputWindowLines
+
+    fun setOutputWindowLines(lines: Int) {
+        val value = lines.coerceIn(100, com.bylins.client.config.MAX_OUTPUT_WINDOW_LINES)
+        if (_outputWindowLines.value == value) return
+        _outputWindowLines.value = value
+        saveConfig()
+    }
+
     private val _sidePanelCollapsed = MutableStateFlow(false)
     val sidePanelCollapsed: StateFlow<Boolean> = _sidePanelCollapsed
     fun setSidePanelCollapsed(collapsed: Boolean) {
@@ -673,6 +691,7 @@ class ClientState {
         _configBackups.value = configData.configBackups
         _outputBufferMb.value = configData.outputBufferMb
         telnetClient.setOutputBufferMb(configData.outputBufferMb)
+        _outputWindowLines.value = configData.outputWindowLines
 
         // Инициализируем скриптинг
         initializeScripting()
@@ -1904,6 +1923,7 @@ class ClientState {
             sidePanelCollapsed = _sidePanelCollapsed.value,
             configBackups = _configBackups.value,
             outputBufferMb = _outputBufferMb.value,
+            outputWindowLines = _outputWindowLines.value,
             pluginPermissions = _pluginPermissions.value,
             outputSplitFractions = getOutputSplitFractions()
         )

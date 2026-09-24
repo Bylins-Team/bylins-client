@@ -92,6 +92,7 @@ fun ScrollbackOutputView(
     onSplitFractionChange: (Float) -> Unit,
     fontFamily: FontFamily,
     fontSize: Int,
+    windowLines: Int,
     emptyPlaceholder: AnnotatedString,
     onSearchFocusChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
@@ -111,9 +112,10 @@ fun ScrollbackOutputView(
     val selection = holder.selection
     val ansiParser = remember { AnsiParser() }
 
-    val limitedRaw = remember(snapshot.text) {
-        if (snapshot.text.length > 100_000) lastLines(snapshot.text, 1000) else snapshot.text
-    }
+    // Окно разметки — последние windowLines строк буфера. Глубина настраивается:
+    // разметка по строкам сделала её почти бесплатной, а что осталось дорогим,
+    // видно в #perf
+    val limitedRaw = remember(snapshot.text, windowLines) { lastLines(snapshot.text, windowLines) }
     val effectiveFirstSeq = remember(snapshot, limitedRaw) {
         snapshot.firstSeq + (snapshot.lineCount - ContentSnapshot.countLines(limitedRaw))
     }
@@ -126,7 +128,9 @@ fun ScrollbackOutputView(
     // Окно режется на логические строки: разметка теперь у каждой своя, и
     // размечается заново только та, что изменилась. Смещения начал строк —
     // для перевода совпадений поиска (они в plain-смещениях) в строки
-    val lineAnnotated = remember(annotated) { splitLines(annotated) }
+    val lineAnnotated = remember(annotated) {
+        Perf.measure(Perf.Stage.UI_SPLIT, annotated.spanStyles.size.toLong()) { splitLines(annotated) }
+    }
     val lineStarts = remember(annotated) { lineStarts(annotated.text) }
     val layoutCache = remember { LineLayoutCache<androidx.compose.ui.text.TextLayoutResult>() }
 

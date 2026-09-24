@@ -23,6 +23,7 @@ import com.bylins.client.ClientState
 import com.bylins.client.OperatingSystem
 import com.bylins.client.config.MAX_CONFIG_BACKUPS
 import com.bylins.client.config.MAX_OUTPUT_BUFFER_MB
+import com.bylins.client.config.MAX_OUTPUT_WINDOW_LINES
 import com.bylins.client.PERMANENT_TAB_IDS
 import com.bylins.client.ui.theme.LocalAppColorScheme
 import com.bylins.client.ui.ALL_TABS
@@ -251,6 +252,51 @@ fun SettingsPanel(
                         text = "МБ истории — это примерно ${outputBufferMb * 15} тысяч строк " +
                             "(максимум $MAX_OUTPUT_BUFFER_MB). Чем больше, тем дороже каждое " +
                             "обновление вывода: смотрите #perf",
+                        color = colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+
+                Divider(color = colorScheme.divider, modifier = Modifier.padding(vertical = 8.dp))
+
+                // Глубина окна разметки: столько строк доступно прокруткой, поиском
+                // и выделением. Дорого не само окно, а разбор ANSI всем окном на
+                // каждое обновление — см. #perf
+                val outputWindowLines by clientState.outputWindowLines.collectAsState()
+                var windowText by remember(outputWindowLines) { mutableStateOf(outputWindowLines.toString()) }
+
+                Text(
+                    text = "Окно вывода",
+                    color = colorScheme.onSurface,
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = windowText,
+                        onValueChange = { value ->
+                            windowText = value.filter { it.isDigit() }.take(7)
+                            windowText.toIntOrNull()?.let { clientState.setOutputWindowLines(it) }
+                        },
+                        singleLine = true,
+                        modifier = Modifier.width(110.dp),
+                        textStyle = LocalTextStyle.current.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        ),
+                        colors = TextFieldDefaults.outlinedTextFieldColors(
+                            textColor = colorScheme.onSurface,
+                            backgroundColor = colorScheme.background,
+                            cursorColor = colorScheme.onSurface,
+                            focusedBorderColor = colorScheme.primary,
+                            unfocusedBorderColor = colorScheme.border
+                        )
+                    )
+                    Text(
+                        text = "строк доступно прокруткой, поиском и выделением " +
+                            "(максимум $MAX_OUTPUT_WINDOW_LINES); ограничено размером буфера",
                         color = colorScheme.onSurfaceVariant,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,

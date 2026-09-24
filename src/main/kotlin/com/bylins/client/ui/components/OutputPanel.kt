@@ -240,8 +240,10 @@ fun OutputPanel(
             // key по id вкладки: при переключении внутренних вкладок создаётся свежее
             // поддерево (иначе переиспользование по тому же месту показывало старую вкладку)
             key(activeTab.id) {
+                val windowLines by clientState.outputWindowLines.collectAsState()
                 com.bylins.client.ui.components.output.ScrollbackOutputView(
                     snapshot = snapshot,
+                    windowLines = windowLines,
                     holder = holder,
                     splitFraction = splitFraction,
                     onSplitFractionChange = { clientState.setOutputSplitFraction(activeTab.id, it) },

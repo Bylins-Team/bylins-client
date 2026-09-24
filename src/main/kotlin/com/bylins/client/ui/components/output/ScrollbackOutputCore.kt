@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import com.bylins.client.ui.scroll.MeasuredWindow
 import com.bylins.client.ui.scroll.SelPoint
@@ -42,22 +43,42 @@ internal fun maxScrollOf(contentHeightPx: Float, viewportPx: Float): Float =
  * Разбивает размеченное окно на логические строки, сохраняя раскраску.
  *
  * Разбор ANSI идёт по всему окну сразу — цвет переносится между строками
- * (камень №12), — а режется уже результат: срез AnnotatedString оставляет
- * отрезки, попавшие в строку. Строк ровно столько, сколько даёт countLines:
- * текст с завершающим переводом строки заканчивается пустой строкой.
+ * (камень №12), — а режется уже результат. Строк ровно столько, сколько
+ * даёт countLines: текст с завершающим переводом строки заканчивается
+ * пустой строкой.
+ *
+ * Не через `subSequence`: тот на каждый срез перебирает ВСЕ отрезки окна,
+ * и на ста тысячах строк с четырьмя сотнями тысяч отрезков UI-поток ушёл
+ * в это на девять минут (камень №14). Здесь отрезки, отсортированные по
+ * началу, проходятся один раз вместе со строками: отрезок посещается
+ * столько раз, сколько строк он задевает.
  */
 internal fun splitLines(annotated: AnnotatedString): List<AnnotatedString> {
     val text = annotated.text
     if (text.isEmpty()) return emptyList()
+    val spans = annotated.spanStyles.sortedBy { it.start }
     val lines = ArrayList<AnnotatedString>()
+    var spanIndex = 0
     var start = 0
     while (true) {
         val newline = text.indexOf('\n', start)
-        if (newline == -1) {
-            lines.add(annotated.subSequence(start, text.length))
-            return lines
-        }
-        lines.add(annotated.subSequence(start, newline))
+        val end = if (newline == -1) text.length else newline
+        // Отрезки, закончившиеся до этой строки, больше не понадобятся
+        while (spanIndex < spans.size && spans[spanIndex].end <= start) spanIndex++
+        lines.add(
+            buildAnnotatedString {
+                append(text, start, end)
+                var j = spanIndex
+                while (j < spans.size && spans[j].start < end) {
+                    val span = spans[j]
+                    val from = maxOf(span.start, start) - start
+                    val to = minOf(span.end, end) - start
+                    if (to > from) addStyle(span.item, from, to)
+                    j++
+                }
+            }
+        )
+        if (newline == -1) return lines
         start = newline + 1
     }
 }

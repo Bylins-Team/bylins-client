@@ -26,6 +26,10 @@ const val DEFAULT_OUTPUT_BUFFER_MB = 1
 
 /** Потолок: дальше выигрыш в истории не окупает цену обновления. */
 const val MAX_OUTPUT_BUFFER_MB = 64
+
+/** Сколько последних строк буфера размечать под отрисовку, прокрутку и поиск. */
+const val DEFAULT_OUTPUT_WINDOW_LINES = 1000
+const val MAX_OUTPUT_WINDOW_LINES = 1_000_000
 class ConfigManager {
     private val json = Json {
         prettyPrint = true
@@ -114,7 +118,8 @@ class ConfigManager {
         sidePanelCollapsed: Boolean = false,
         pluginPermissions: Map<String, Set<String>> = emptyMap(),
         configBackups: Int = DEFAULT_CONFIG_BACKUPS,
-        outputBufferMb: Int = DEFAULT_OUTPUT_BUFFER_MB
+        outputBufferMb: Int = DEFAULT_OUTPUT_BUFFER_MB,
+        outputWindowLines: Int = DEFAULT_OUTPUT_WINDOW_LINES
     ) {
         try {
             val config = ClientConfig(
@@ -144,7 +149,8 @@ class ConfigManager {
                 sidePanelCollapsed = sidePanelCollapsed,
                 pluginPermissions = pluginPermissions,
                 configBackups = configBackups,
-                outputBufferMb = outputBufferMb
+                outputBufferMb = outputBufferMb,
+                outputWindowLines = outputWindowLines
             )
 
             // Конфиг не читали — значит и состояния ещё нет, писать нечего
@@ -221,6 +227,7 @@ class ConfigManager {
             val pluginPermissions = config.pluginPermissions
             val configBackups = config.configBackups
             val outputBufferMb = config.outputBufferMb
+            val outputWindowLines = config.outputWindowLines
 
             val contextCommandRules = config.contextCommandRules
             val contextCommandMaxQueueSize = config.contextCommandMaxQueueSize
@@ -254,7 +261,8 @@ class ConfigManager {
                 sidePanelCollapsed = sidePanelCollapsed,
                 pluginPermissions = pluginPermissions,
                 configBackups = configBackups,
-                outputBufferMb = outputBufferMb
+                outputBufferMb = outputBufferMb,
+                outputWindowLines = outputWindowLines
             )
         } catch (e: Exception) {
             // Не помечаем конфиг загруженным: файл есть, но прочитать не вышло.
@@ -386,5 +394,6 @@ data class ConfigData(
     val sidePanelCollapsed: Boolean = false,
     val pluginPermissions: Map<String, Set<String>> = emptyMap(),
     val configBackups: Int = DEFAULT_CONFIG_BACKUPS,
-    val outputBufferMb: Int = DEFAULT_OUTPUT_BUFFER_MB
+    val outputBufferMb: Int = DEFAULT_OUTPUT_BUFFER_MB,
+    val outputWindowLines: Int = DEFAULT_OUTPUT_WINDOW_LINES
 )
