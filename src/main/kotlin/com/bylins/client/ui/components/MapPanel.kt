@@ -340,8 +340,9 @@ fun MapPanel(
                     // Клавиатура работает, когда карта в фокусе — после клика по ней.
                     // Стрелки ходят по комнатам, как компас: обзор переходит по
                     // выходу С/Ю/З/В; PgUp/PgDn — вверх и вниз. Со сдвигом (Shift)
-                    // стрелки таскают саму карту на клетку. +/− — масштаб,
-                    // Home — к игроку, Esc — снова следовать за ним
+                    // стрелки таскают саму карту на клетку. Enter — идти к комнате
+                    // обзора маршрутом (спидволк), карта при этом следует за игроком.
+                    // +/− — масштаб, Home — к игроку, Esc — снова следовать за ним
                     .focusRequester(mapFocus)
                     .focusable()
                     .onPreviewKeyEvent { event ->
@@ -362,6 +363,12 @@ fun MapPanel(
                             Key.PageDown -> { floor(-1)?.let(lookAt); true }
                             Key.Plus, Key.Equals, Key.NumPadAdd -> { zoomAt(ZOOM_STEP, null); true }
                             Key.Minus, Key.NumPadSubtract -> { zoomAt(1f / ZOOM_STEP, null); true }
+                            Key.Enter, Key.NumPadEnter -> {
+                                effectiveCenterRoomId?.takeIf { it != currentRoomId }?.let { target ->
+                                    if (clientState.startWalk(target)) followPlayer = true
+                                }
+                                true
+                            }
                             Key.MoveHome -> { currentRoomId?.let(lookAt); true }
                             Key.Escape -> { followPlayer = true; true }
                             else -> false
@@ -555,10 +562,20 @@ fun MapPanel(
                             )
                         }
 
-                        // Built-in: Edit room
                         if (customCommands.isNotEmpty()) {
                             Divider()
                         }
+                        // Built-in: идти сюда — то же, что Enter по комнате обзора
+                        DropdownMenuItem(
+                            text = { Text("Идти сюда") },
+                            enabled = currentRoomId != null && contextMenuRoom?.id != currentRoomId,
+                            onClick = {
+                                contextMenuRoom?.let { room ->
+                                    if (clientState.startWalk(room.id)) followPlayer = true
+                                }
+                                showContextMenu = false
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Редактировать") },
                             onClick = {
