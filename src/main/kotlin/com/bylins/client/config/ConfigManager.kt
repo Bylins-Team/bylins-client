@@ -31,6 +31,14 @@ const val MAX_CONFIG_BACKUPS = 20
 const val DEFAULT_OUTPUT_BUFFER_LINES = 100_000
 const val MIN_OUTPUT_BUFFER_LINES = 1_000
 const val MAX_OUTPUT_BUFFER_LINES = 1_000_000
+
+/**
+ * Сколько команд держать в истории ввода (стрелки и подстановка по Tab).
+ * Столько же уходит в ~/.bylins-client/history.txt.
+ */
+const val DEFAULT_COMMAND_HISTORY_SIZE = 500
+const val MIN_COMMAND_HISTORY_SIZE = 10
+const val MAX_COMMAND_HISTORY_SIZE = 10_000
 class ConfigManager {
     private val json = Json {
         prettyPrint = true
@@ -119,7 +127,8 @@ class ConfigManager {
         sidePanelCollapsed: Boolean = false,
         pluginPermissions: Map<String, Set<String>> = emptyMap(),
         configBackups: Int = DEFAULT_CONFIG_BACKUPS,
-        outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES
+        outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES,
+        commandHistorySize: Int = DEFAULT_COMMAND_HISTORY_SIZE
     ) {
         try {
             val config = ClientConfig(
@@ -149,7 +158,8 @@ class ConfigManager {
                 sidePanelCollapsed = sidePanelCollapsed,
                 pluginPermissions = pluginPermissions,
                 configBackups = configBackups,
-                outputBufferLines = outputBufferLines
+                outputBufferLines = outputBufferLines,
+                commandHistorySize = commandHistorySize
             )
 
             // Конфиг не читали — значит и состояния ещё нет, писать нечего
@@ -226,6 +236,7 @@ class ConfigManager {
             val pluginPermissions = config.pluginPermissions
             val configBackups = config.configBackups
             val outputBufferLines = config.outputBufferLines
+            val commandHistorySize = config.commandHistorySize
 
             val contextCommandRules = config.contextCommandRules
             val contextCommandMaxQueueSize = config.contextCommandMaxQueueSize
@@ -259,7 +270,8 @@ class ConfigManager {
                 sidePanelCollapsed = sidePanelCollapsed,
                 pluginPermissions = pluginPermissions,
                 configBackups = configBackups,
-                outputBufferLines = outputBufferLines
+                outputBufferLines = outputBufferLines,
+                commandHistorySize = commandHistorySize
             )
         } catch (e: Exception) {
             // Не помечаем конфиг загруженным: файл есть, но прочитать не вышло.
@@ -391,5 +403,6 @@ data class ConfigData(
     val sidePanelCollapsed: Boolean = false,
     val pluginPermissions: Map<String, Set<String>> = emptyMap(),
     val configBackups: Int = DEFAULT_CONFIG_BACKUPS,
-    val outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES
+    val outputBufferLines: Int = DEFAULT_OUTPUT_BUFFER_LINES,
+    val commandHistorySize: Int = DEFAULT_COMMAND_HISTORY_SIZE
 )

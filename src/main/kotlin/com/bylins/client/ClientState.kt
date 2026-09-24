@@ -47,6 +47,27 @@ class ClientState {
     private val sendScope = CoroutineScope(Dispatchers.IO.limitedParallelism(1))
     private val configManager = ConfigManager()
 
+    /**
+     * История команд: общая на клиент, переживает перезапуск.
+     */
+    val commandHistory = com.bylins.client.history.CommandHistory()
+
+    /**
+     * Последнее, что пришло от сервера, похоже на приглашение ввести пароль.
+     *
+     * Нужно, чтобы не класть пароль в историю на диске: телнетного "не показывай ввод"
+     * сервер не шлёт, так что узнать про пароль можно только по самому приглашению.
+     */
+    @Volatile
+    private var passwordPromptPending = false
+
+    /** Забирает признак "спрашивали пароль" и сбрасывает его. */
+    fun consumePasswordPrompt(): Boolean {
+        val pending = passwordPromptPending
+        passwordPromptPending = false
+        return pending
+    }
+
     // Флаг для предотвращения множественного сохранения при инициализации
     private var isInitializing = true
 
@@ -398,6 +419,24 @@ class ClientState {
         saveConfig()
     }
 
+    /**
+     * Сколько команд помнит строка ввода: стрелки вверх-вниз и подстановка по Tab.
+     * Столько же лежит в ~/.bylins-client/history.txt.
+     */
+    private val _commandHistorySize = MutableStateFlow(com.bylins.client.config.DEFAULT_COMMAND_HISTORY_SIZE)
+    val commandHistorySize: StateFlow<Int> = _commandHistorySize
+
+    fun setCommandHistorySize(size: Int) {
+        val value = size.coerceIn(
+            com.bylins.client.config.MIN_COMMAND_HISTORY_SIZE,
+            com.bylins.client.config.MAX_COMMAND_HISTORY_SIZE
+        )
+        if (_commandHistorySize.value == value) return
+        _commandHistorySize.value = value
+        commandHistory.maxSize = value
+        saveConfig()
+    }
+
     private val _sidePanelCollapsed = MutableStateFlow(false)
     val sidePanelCollapsed: StateFlow<Boolean> = _sidePanelCollapsed
     fun setSidePanelCollapsed(collapsed: Boolean) {
@@ -672,6 +711,8 @@ class ClientState {
         _configBackups.value = configData.configBackups
         _outputBufferLines.value = configData.outputBufferLines
         telnetClient.setOutputBufferLines(configData.outputBufferLines)
+        _commandHistorySize.value = configData.commandHistorySize
+        commandHistory.maxSize = configData.commandHistorySize
 
         // Инициализируем скриптинг
         initializeScripting()
@@ -1433,6 +1474,10 @@ class ClientState {
      * Возвращает модифицированный текст с примененными colorize от триггеров
      */
     fun processIncomingText(text: String): String {
+        if (text.isNotEmpty()) {
+            passwordPromptPending =
+                com.bylins.client.history.CommandHistory.looksLikePasswordPrompt(text)
+        }
         // Логируем весь полученный текст
         if (text.isNotEmpty()) {
             logManager.log(text)
@@ -1903,6 +1948,7 @@ class ClientState {
             sidePanelCollapsed = _sidePanelCollapsed.value,
             configBackups = _configBackups.value,
             outputBufferLines = _outputBufferLines.value,
+            commandHistorySize = _commandHistorySize.value,
             pluginPermissions = _pluginPermissions.value,
             outputSplitFractions = getOutputSplitFractions()
         )
