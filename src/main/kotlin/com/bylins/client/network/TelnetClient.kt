@@ -14,6 +14,9 @@ import java.io.OutputStream
 import java.net.Socket
 
 private val logger = KotlinLogging.logger("TelnetClient")
+private const val MIN_READ_BUFFER = 16 * 1024
+private const val MAX_READ_BUFFER = 256 * 1024
+
 class TelnetClient(
     private val clientState: ClientState? = null,
     encoding: String = "UTF-8"
@@ -217,9 +220,17 @@ class TelnetClient(
     private fun startReading() {
         readJob = CoroutineScope(Dispatchers.IO).launch {
             try {
-                val buffer = ByteArray(4096)
+                // Размер буфера берём у самого сокета: столько ядро и отдаёт за одно
+                // чтение. Прежние 4096 были меньше любого приёмного буфера, поэтому ответ
+                // сервера резался на части не сетью, а нами -- и экран показывал огрызок,
+                // а следующим кадром дёргался. Границы на случай странных значений.
+                val socketBuffer = runCatching { socket?.receiveBufferSize ?: 0 }.getOrDefault(0)
+                val size = socketBuffer.coerceIn(MIN_READ_BUFFER, MAX_READ_BUFFER)
+                Perf.buffers(ours = size, socket = socketBuffer)
+                val buffer = ByteArray(size)
                 while (isActive && _isConnected.value) {
                     val bytesRead = inputStream?.read(buffer) ?: -1
+                    if (bytesRead > 0) Perf.readDone(bytesRead)
                     if (bytesRead == -1) {
                         // Соединение закрыто сервером
                         disconnect()

@@ -95,6 +95,30 @@ object Perf {
 
     private val stages = Stage.values().associateWith { Counters() }
 
+    // --- Буфер чтения: его размер и сколько раз чтение упёрлось в него целиком ---
+    // Чтение «под завязку» значит, что в сокете было ещё, и ответ сервера порезан на части
+    // не сетью, а нашим буфером: экран успевает показать огрызок.
+    @Volatile
+    private var readBufferSize = 0
+
+    @Volatile
+    private var socketBufferSize = 0
+
+    private val fullReads = AtomicLong()
+
+    /** Запоминает размеры: [ours] -- наш буфер чтения, [socket] -- приёмный буфер сокета. */
+    fun buffers(ours: Int, socket: Int) {
+        readBufferSize = ours
+        socketBufferSize = socket
+    }
+
+    /** Отмечает чтение; [bytes] == размер буфера значит «в сокете было ещё». */
+    fun readDone(bytes: Int) {
+        if (readBufferSize > 0 && bytes >= readBufferSize) {
+            fullReads.incrementAndGet()
+        }
+    }
+
     /**
      * Меряет блок.
      *
@@ -139,6 +163,7 @@ object Perf {
 
     fun reset() {
         stages.values.forEach { it.reset() }
+        fullReads.set(0)
         pendingInputNanos.set(0)
     }
 
@@ -170,9 +195,19 @@ object Perf {
             )
         }
         appendLine()
+        appendLine(buffersLine())
         appendLine(memoryLine())
         appendLine(gcLine())
         append("Порог жалобы в лог: ${slowThresholdMs} мс")
+    }
+
+    private fun buffersLine(): String {
+        if (readBufferSize == 0) return "Буфер чтения: пока не читали"
+        val full = fullReads.get()
+        val hint = if (full == 0L) "" else " -- ответ сервера режется на части"
+        return "Буфер чтения: %d байт (приёмный буфер сокета %d), чтений под завязку: %d%s".format(
+            readBufferSize, socketBufferSize, full, hint
+        )
     }
 
     private fun memoryLine(): String {
