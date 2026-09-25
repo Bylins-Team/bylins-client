@@ -241,6 +241,7 @@ class TelnetClient(
                     telnetCommands.forEach { handleTelnetCommand(it) }
 
                     if (text.isNotEmpty()) {
+                        com.bylins.client.perf.PacketTrace.record(bytesRead, text)
                         // Обрабатываем текст триггерами и получаем модифицированную версию с colorize
                         val modifiedText = Perf.measure(Perf.Stage.TEXT_PROCESS, text.length.toLong()) {
                             clientState?.processIncomingText(text) ?: text
