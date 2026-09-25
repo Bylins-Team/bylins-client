@@ -26,13 +26,44 @@ class LineBufferTest {
     }
 
     @Test
-    fun `перевод строки на конце оставляет пустую незавершённую строку`() {
+    fun `перевод строки на конце не заводит пустую строку`() {
         val buffer = LineBuffer(100)
 
         buffer.append("раз\n")
 
-        assertEquals(listOf("раз", ""), buffer.snapshot().lines)
-        assertEquals("раз\n", buffer.snapshot().text())
+        assertEquals(listOf("раз"), buffer.snapshot().lines)
+
+        // Строка появляется вместе с текстом, который в неё пришёл
+        buffer.append("два")
+        assertEquals(listOf("раз", "два"), buffer.snapshot().lines)
+    }
+
+    @Test
+    fun `пустые строки внутри текста остаются`() {
+        val buffer = LineBuffer(100)
+
+        buffer.append("раз\n\nтри\n")
+
+        assertEquals(listOf("раз", "", "три"), buffer.snapshot().lines)
+    }
+
+    @Test
+    fun `ответ сервера не удлиняет буфер на лишнюю строку`() {
+        // Так выглядит любая команда: в буфере промпт, ответ начинается с перевода
+        // строки, который его закрывает. Раньше на этом месте появлялась пустая строка,
+        // и весь вывод дёргался вверх на строку, а потом обратно.
+        val buffer = LineBuffer(100)
+        buffer.append("Базарная площадь\n")
+        buffer.append("630H 179M Вых:СВЮЗ> ")
+        val beforeAnswer = buffer.lineCount
+
+        buffer.append("\r\n")
+
+        assertEquals(beforeAnswer, buffer.lineCount, "лишняя пустая строка в конце")
+
+        buffer.append("Вы посмотрели вокруг.\r\n630H 179M Вых:СВЮЗ> ")
+        assertEquals(beforeAnswer + 2, buffer.lineCount)
+        assertEquals("630H 179M Вых:СВЮЗ> ", buffer.lastLine)
     }
 
     @Test
@@ -63,7 +94,7 @@ class LineBufferTest {
 
         buffer.insertBeforeIncomplete("сообщение")
 
-        assertEquals(listOf("комната", "сообщение", ""), buffer.snapshot().lines)
+        assertEquals(listOf("комната", "сообщение"), buffer.snapshot().lines)
     }
 
     @Test
@@ -72,7 +103,7 @@ class LineBufferTest {
 
         buffer.insertBeforeIncomplete("сообщение")
 
-        assertEquals(listOf("сообщение", ""), buffer.snapshot().lines)
+        assertEquals(listOf("сообщение"), buffer.snapshot().lines)
     }
 
     @Test
