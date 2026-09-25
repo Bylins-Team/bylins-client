@@ -28,13 +28,13 @@ object Perf {
     var slowThresholdMs: Long = System.getProperty("bylins.perf.slow")?.toLongOrNull()?.takeIf { it > 0 } ?: 50
 
     /** Этапы обработки. Порядок — как в конвейере, им же печатается отчёт. */
-    enum class Stage(val title: String) {
-        NET_PARSE("telnet: разбор пакета"),
-        TEXT_PROCESS("текст: события и триггеры"),
-        TABS_ROUTE("вкладки: раскладка"),
-        BUFFER_APPEND("буфер: добавление"),
-        UI_ANSI("вывод: разбор ANSI"),
-        UI_MEASURE("вывод: разметка текста"),
+    enum class Stage(val title: String, val unit: String = "") {
+        NET_PARSE("telnet: разбор пакета", "байт"),
+        TEXT_PROCESS("текст: события и триггеры", "символов"),
+        TABS_ROUTE("вкладки: раскладка", "символов"),
+        BUFFER_APPEND("буфер: добавление", "символов"),
+        UI_ANSI("вывод: разбор ANSI", "строк"),
+        UI_MEASURE("вывод: разметка текста", "строк"),
         END_TO_END("от прихода байтов до кадра")
     }
 
@@ -44,13 +44,26 @@ object Perf {
         val count = AtomicLong()
         val totalNanos = AtomicLong()
         val maxNanos = AtomicLong()
+        /**
+         * Объём работы: строк, байт -- что этап считает своей единицей. Нужен, чтобы
+         * отличить «этап дорог сам по себе» от «раз в сколько-то пакетов прилетает пачка».
+         * Замеры без объёма (size < 0) в счёт не идут -- иначе среднее врало бы.
+         */
+        val volumeCount = AtomicLong()
+        val volumeTotal = AtomicLong()
+        val volumeMax = AtomicLong()
         /** Корзина i — замеры от 2^i до 2^(i+1) микросекунд. */
         val histogram = AtomicLongArray(BUCKETS)
 
-        fun add(nanos: Long) {
+        fun add(nanos: Long, size: Long) {
             count.incrementAndGet()
             totalNanos.addAndGet(nanos)
             maxNanos.accumulateAndGet(nanos, ::maxOf)
+            if (size >= 0) {
+                volumeCount.incrementAndGet()
+                volumeTotal.addAndGet(size)
+                volumeMax.accumulateAndGet(size, ::maxOf)
+            }
             val micros = nanos / 1_000
             val bucket = if (micros <= 0) 0 else (63 - java.lang.Long.numberOfLeadingZeros(micros)).coerceIn(0, BUCKETS - 1)
             histogram.incrementAndGet(bucket)
@@ -60,6 +73,9 @@ object Perf {
             count.set(0)
             totalNanos.set(0)
             maxNanos.set(0)
+            volumeCount.set(0)
+            volumeTotal.set(0)
+            volumeMax.set(0)
             for (i in 0 until BUCKETS) histogram.set(i, 0)
         }
 
@@ -96,7 +112,7 @@ object Perf {
 
     /** Вынесено из measure: inline-функция не может трогать приватные поля. */
     fun record(stage: Stage, nanos: Long, size: Long = -1) {
-        stages.getValue(stage).add(nanos)
+        stages.getValue(stage).add(nanos, size)
         val ms = nanos / 1_000_000
         if (ms >= slowThresholdMs) {
             val where = if (size >= 0) ", объём $size" else ""
@@ -128,7 +144,7 @@ object Perf {
 
     /** Человекочитаемый отчёт: этапы плюс память и сборщик мусора. */
     fun report(): String = buildString {
-        appendLine("Этап                              вызовов   сумма    среднее   p95    макс")
+        appendLine("Этап                              вызовов   сумма    среднее   p95    макс     объём: среднее / наибольшее")
         for (stage in Stage.values()) {
             val c = stages.getValue(stage)
             val count = c.count.get()
@@ -137,8 +153,17 @@ object Perf {
             val avgMs = c.totalNanos.get() / 1_000_000.0 / count
             val p95Ms = c.percentileMicros(0.95) / 1_000.0
             val maxMs = c.maxNanos.get() / 1_000_000.0
+            val volumeCount = c.volumeCount.get()
+            val volume = if (volumeCount == 0L) "" else
+                "  %7.1f / %-6d %s".format(
+                    c.volumeTotal.get().toDouble() / volumeCount,
+                    c.volumeMax.get(),
+                    stage.unit
+                )
             appendLine(
-                "%-32s %7d %7.0f мс %6.1f %6.1f %7.1f".format(stage.title, count, totalMs, avgMs, p95Ms, maxMs)
+                "%-32s %7d %7.0f мс %6.1f %6.1f %7.1f%s".format(
+                    stage.title, count, totalMs, avgMs, p95Ms, maxMs, volume
+                )
             )
         }
         appendLine()
