@@ -13,6 +13,8 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
@@ -107,6 +109,7 @@ fun InputPanel(
                     fontSize = 14.sp
                 )
             }
+            val clipboard = LocalClipboardManager.current
             BasicTextField(
                 value = inputText,
                 onValueChange = { newValue ->
@@ -126,7 +129,34 @@ fun InputPanel(
                     .fillMaxWidth()
                     .focusRequester(focusRequester)
                     .onPreviewKeyEvent { event ->
+                        // Ctrl+C/V/X/A в русской раскладке: Compose видит «с», а не
+                        // C, и своё копирование не запускает. Если физическая
+                        // клавиша — латинская, а код события — нет, делаем то же
+                        // руками; где коды совпадают, ветка не срабатывает
+                        val physical = com.bylins.client.hotkeys.PhysicalKey.of(event)
+                        val isCommand = com.bylins.client.ui.CommandModifier.isPressed(event.isCtrlPressed, event.isMetaPressed)
+                        val layoutFallback = event.type == KeyEventType.KeyDown && isCommand && physical != event.key &&
+                            !event.isAltPressed && !event.isShiftPressed
                         when {
+                            layoutFallback && physical == Key.C -> {
+                                selectedText(inputText)?.let { clipboard.setText(AnnotatedString(it)) }
+                                true
+                            }
+                            layoutFallback && physical == Key.X -> {
+                                selectedText(inputText)?.let {
+                                    clipboard.setText(AnnotatedString(it))
+                                    inputText = replaceSelection(inputText, "")
+                                }
+                                true
+                            }
+                            layoutFallback && physical == Key.V -> {
+                                clipboard.getText()?.text?.let { inputText = replaceSelection(inputText, it) }
+                                true
+                            }
+                            layoutFallback && physical == Key.A -> {
+                                inputText = inputText.copy(selection = TextRange(0, inputText.text.length))
+                                true
+                            }
                             (event.key == Key.Enter || event.key == Key.NumPadEnter) && event.type == KeyEventType.KeyDown -> {
                                 sendCommand()
                                 true
@@ -187,4 +217,18 @@ fun InputPanel(
             Icon(Icons.Default.Send, contentDescription = "Отправить")
         }
     }
+}
+
+/** Выделенный текст поля; null, если выделения нет. */
+private fun selectedText(value: TextFieldValue): String? {
+    val range = value.selection
+    if (range.collapsed) return null
+    return value.text.substring(range.min, range.max)
+}
+
+/** Заменяет выделение (или вставляет в позицию курсора) текстом [text]. */
+private fun replaceSelection(value: TextFieldValue, text: String): TextFieldValue {
+    val range = value.selection
+    val replaced = value.text.substring(0, range.min) + text + value.text.substring(range.max)
+    return TextFieldValue(text = replaced, selection = TextRange(range.min + text.length))
 }
