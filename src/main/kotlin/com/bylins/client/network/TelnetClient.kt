@@ -36,6 +36,20 @@ class TelnetClient(
     private val _snapshot = MutableStateFlow(LineSnapshot.EMPTY)
     val snapshot: StateFlow<LineSnapshot> = _snapshot
 
+    /**
+     * Склейка обновлений вывода. Окно приходит из конфига (outputCoalesceMs).
+     */
+    private val publisher = SnapshotPublisher(
+        scope = CoroutineScope(Dispatchers.IO),
+        delayMs = com.bylins.client.config.DEFAULT_OUTPUT_COALESCE_MS.toLong()
+    ) {
+        synchronized(bufferLock) { _snapshot.value = buffer.snapshot() }
+    }
+
+    fun setOutputCoalesceMs(ms: Int) {
+        publisher.delayMs = ms.toLong()
+    }
+
     // Буфер правят три разных потока: читающий сокет, UI (эхо команды игрока)
     // и потоки плагинов (команды ИИ через ai-control). Без замка одна правка
     // теряет другую: пропадает то эхо команды, то кусок вывода сервера.
@@ -160,6 +174,9 @@ class TelnetClient(
      */
     fun echoCommand(command: String) {
         appendToBuffer("\u001B[1;36m$command\u001B[0m\n")
+        // Своё эхо и системные сообщения показываем сразу: склейка нужна для текста
+        // сервера, который приходит кусками, а тут ждать продолжения нечего
+        publisher.flush()
         onLocalOutput?.invoke(command)
     }
 
@@ -172,6 +189,7 @@ class TelnetClient(
         // Обрабатываем текст триггерами и получаем модифицированную версию с colorize
         val modifiedText = clientState?.processIncomingText(textWithNewline) ?: textWithNewline
         appendToBuffer(modifiedText)
+        publisher.flush()
     }
 
     /**
@@ -198,9 +216,10 @@ class TelnetClient(
         Perf.measure(Perf.Stage.BUFFER_APPEND, text.length.toLong()) {
             synchronized(bufferLock) {
                 buffer.insertBeforeIncomplete(text)
-                _snapshot.value = buffer.snapshot()
             }
         }
+        // Ответ на свою же команду ждать незачем -- показываем сразу
+        publisher.flush()
     }
 
     /**
@@ -212,9 +231,11 @@ class TelnetClient(
         Perf.measure(Perf.Stage.BUFFER_APPEND, text.length.toLong()) {
             synchronized(bufferLock) {
                 buffer.append(text)
-                _snapshot.value = buffer.snapshot()
             }
         }
+        // Снимок отдаётся со склейкой: сеть режет ответ на куски по размеру сегмента,
+        // и рисовать каждый кусок значит показывать недорисованное
+        publisher.request()
     }
 
     private fun startReading() {
