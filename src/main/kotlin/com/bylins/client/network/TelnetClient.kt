@@ -271,6 +271,10 @@ class TelnetClient(
                     // комнаты и молча не срабатывали при входе, оживая только
                     // после «смотреть», когда позиция уже обновилась.
                     telnetCommands.forEach { handleTelnetCommand(it) }
+                    // Сервер сказал "ответ закончен" -- ждать больше нечего. Флаг
+                    // выставляем до разбора текста: сам кадр отдаём уже после того, как
+                    // текст этого пакета ляжет в буфер
+                    val answerEnded = telnetCommands.any { it.type == TelnetCommandType.END_OF_ANSWER }
 
                     if (text.isNotEmpty()) {
                         com.bylins.client.perf.PacketTrace.record(bytesRead, text)
@@ -279,6 +283,9 @@ class TelnetClient(
                             clientState?.processIncomingText(text) ?: text
                         }
                         appendToBuffer(modifiedText)
+                    }
+                    if (answerEnded) {
+                        publisher.flush()
                     }
                 }
             } catch (e: IOException) {
@@ -431,6 +438,11 @@ class TelnetClient(
         const val WILL: Byte = 251.toByte()
         const val SB: Byte = 250.toByte()     // Subnegotiation Begin
         const val SE: Byte = 240.toByte()     // Subnegotiation End
+
+        // Конец ответа: сервер ставит их после строки приглашения. Для нас это точный
+        // признак "больше ничего не будет" -- лучше любого ожидания по времени
+        const val GA: Byte = 249.toByte()     // Go Ahead
+        const val EOR: Byte = 239.toByte()    // End Of Record
 
         // Telnet опции
         const val TERMINAL_TYPE: Byte = 24

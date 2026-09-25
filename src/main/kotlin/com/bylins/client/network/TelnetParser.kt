@@ -9,7 +9,16 @@ import java.nio.charset.CharsetDecoder
 import java.nio.charset.CodingErrorAction
 
 enum class TelnetCommandType {
-    DO, DONT, WILL, WONT, SUBNEGOTIATION
+    DO, DONT, WILL, WONT, SUBNEGOTIATION,
+
+    /**
+     * Конец ответа: IAC GA или IAC EOR после строки приглашения.
+     *
+     * Сервер ставит их, когда у игрока включено "Автозавершение". Для клиента это точный
+     * признак, что ответ дорисован и можно показывать кадр, -- в отличие от ожидания по
+     * времени, которое приходится подбирать под скорость сети.
+     */
+    END_OF_ANSWER
 }
 
 data class TelnetCommand(
@@ -96,6 +105,10 @@ class TelnetParser(
                         TelnetClient.IAC -> {
                             // Escaped IAC (255)
                             textBuffer.write(TelnetClient.IAC.toInt())
+                            state = State.NORMAL
+                        }
+                        TelnetClient.GA, TelnetClient.EOR -> {
+                            commands.add(TelnetCommand(TelnetCommandType.END_OF_ANSWER, byte))
                             state = State.NORMAL
                         }
                         else -> {
