@@ -49,6 +49,14 @@ class OutputViewHolder {
         get() = _scrollbackScrollPx.value
         set(value) { _scrollbackScrollPx.value = value }
 
+    /**
+     * Скопировать выделение этой панели; true -- было что копировать.
+     *
+     * Ставит сама панель: только у неё есть разобранные строки. Нужен, чтобы Ctrl+C
+     * работал и когда фокус в строке ввода, а это почти всегда.
+     */
+    var copySelection: (() -> Boolean)? = null
+
     // Идёт ли сейчас выделение мышью. Пока true — автоскролл (follow) к низу
     // заморожен, чтобы заякоренное выделение не уезжало за экран при новом тексте.
     var isSelecting = false

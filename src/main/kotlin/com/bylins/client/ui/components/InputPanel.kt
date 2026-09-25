@@ -140,7 +140,14 @@ fun InputPanel(
                         when {
                             layoutFallback && physical == Key.C -> {
                                 selectedText(inputText)?.let { clipboard.setText(AnnotatedString(it)) }
+                                    ?: clientState.copyOutputSelection()
                                 true
+                            }
+                            // Ctrl+C без выделения в самой строке копирует выделенное
+                            // в выводе: фокус тут, а выделяют мышью там
+                            event.type == KeyEventType.KeyDown && isCommand && physical == Key.C
+                                && selectedText(inputText) == null -> {
+                                clientState.copyOutputSelection()
                             }
                             layoutFallback && physical == Key.X -> {
                                 selectedText(inputText)?.let {

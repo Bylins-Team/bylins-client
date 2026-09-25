@@ -326,12 +326,19 @@ fun ScrollbackOutputView(
                 }
                 window.pointToSelPoint(pos.x, contentY)
             }
-            val copySelection: () -> Unit = {
-                if (!isEmpty) {
-                    val text = selection.copyText(parsed.firstSeq, parsed.lineCount) { parsed.lines[it].plain }
-                    if (text.isNotEmpty()) clipboard.setText(AnnotatedString(text))
+            val copySelection: () -> Boolean = {
+                val text = if (isEmpty) "" else
+                    selection.copyText(parsed.firstSeq, parsed.lineCount) { parsed.lines[it].plain }
+                if (text.isNotEmpty()) {
+                    clipboard.setText(AnnotatedString(text))
+                    true
+                } else {
+                    false
                 }
             }
+            // Способ скопировать выделение отдаём наружу: Ctrl+C приходит в строку
+            // ввода, а не сюда -- фокус почти всегда там
+            SideEffect { holder.copySelection = copySelection }
             val handleKey: (KeyEvent) -> Boolean = handleKey@{ event ->
                 if (event.type != KeyEventType.KeyDown) return@handleKey false
                 when {
@@ -371,6 +378,7 @@ fun ScrollbackOutputView(
 
             // Ссылки на актуальные значения для долгоживущего drag-жеста выделения
             val pointToSelRef by rememberUpdatedState(pointToSel)
+            val copySelectionRef by rememberUpdatedState(copySelection)
             val userScrollToRef by rememberUpdatedState(userScrollTo)
             val scrollbackRef by rememberUpdatedState(scrollbackPx)
             val topPaneHeightRef by rememberUpdatedState(topPaneHeightPx)
@@ -417,6 +425,11 @@ fun ScrollbackOutputView(
                                         selection.clear()
                                         holder.bumpSelection()
                                     }
+                                    // Выделил мышью -- текст уже в буфере обмена, как в
+                                    // консоли и в старых мад-клиентах. Ctrl+C для этого не
+                                    // годится: фокус почти всегда в строке ввода, и до
+                                    // панели вывода нажатие не доходит
+                                    if (moved) copySelectionRef()
                                     holder.isSelecting = false
                                     break
                                 }

@@ -610,6 +610,13 @@ class ClientState {
             }
         }
 
+    /**
+     * Копирует выделение в панели вывода активной вкладки; true -- было что копировать.
+     * Нужен строке ввода: Ctrl+C нажимают, не целясь мышью в вывод.
+     */
+    fun copyOutputSelection(): Boolean =
+        outputViewHolders[activeTabId.value]?.copySelection?.invoke() ?: false
+
     /** Снимок сохранённых долей разделителя (для записи в конфиг). */
     fun getOutputSplitFractions(): Map<String, Float> = outputSplitFractions.toMap()
 
