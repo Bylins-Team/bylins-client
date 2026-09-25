@@ -64,6 +64,39 @@ class SnapshotPublisherTest {
     }
 
     @Test
+    fun `кусок в пределах окна отодвигает отрисовку`() {
+        val scope = CoroutineScope(Dispatchers.IO)
+        val published = AtomicInteger()
+        val publisher = SnapshotPublisher(scope, delayMs = 40) { published.incrementAndGet() }
+
+        publisher.request()
+        Thread.sleep(25)          // хвост приехал в пределах окна
+        publisher.request()
+        Thread.sleep(25)          // прежнее окно уже истекло бы -- но мы ждём тишины
+
+        assertEquals(0, published.get(), "отрисовали, не дождавшись тишины")
+        waitUntil("публикации после тишины") { published.get() == 1 }
+        scope.cancel()
+    }
+
+    @Test
+    fun `сплошной поток не откладывается дольше потолка`() {
+        val scope = CoroutineScope(Dispatchers.IO)
+        val published = AtomicInteger()
+        val publisher = SnapshotPublisher(scope, delayMs = 20) { published.incrementAndGet() }
+
+        // Текст идёт без пауз: тишины не будет вовсе, но потолок обязан сработать
+        val stop = System.currentTimeMillis() + 300
+        while (System.currentTimeMillis() < stop) {
+            publisher.request()
+            Thread.sleep(5)
+        }
+
+        assertTrue(published.get() >= 2, "поток замер в ожидании тишины: ${published.get()}")
+        scope.cancel()
+    }
+
+    @Test
     fun `поток продолжает обновляться, а не замирает`() {
         val scope = CoroutineScope(Dispatchers.IO)
         val published = AtomicInteger()

@@ -52,6 +52,34 @@ object PacketTrace {
     }
 
     /**
+     * Запись кадра панели вывода: что она насчитала и куда поставила вид.
+     *
+     * Пакетов мало, а кадров может быть несколько на пакет -- по записи видно, рисуется ли
+     * промежуточное состояние (например, текст встал не на место и следующим кадром прыгнул).
+     *
+     * @param lines сколько строк в буфере
+     * @param contentHeight полная высота содержимого
+     * @param maxScroll предел прокрутки
+     * @param scroll где стоит вид
+     * @param split раздвоен ли вывод
+     */
+    @Synchronized
+    fun frame(lines: Int, contentHeight: Float, maxScroll: Float, scroll: Float, split: Boolean) {
+        val target = file ?: return
+        try {
+            target.appendText(
+                "%s  кадр: строк %d, высота %.0f, предел %.0f, вид %.0f%s\n".format(
+                    LocalDateTime.now().format(stamp), lines, contentHeight, maxScroll, scroll,
+                    if (split) ", раздвоение" else ""
+                )
+            )
+        } catch (e: Exception) {
+            println("PacketTrace: не записать кадр (${e.message})")
+            stop()
+        }
+    }
+
+    /**
      * @param bytes сколько байт прочитано из сети
      * @param text расшифрованный текст пакета (для начала строки)
      */

@@ -245,6 +245,17 @@ fun ScrollbackOutputView(
             // Держатель узнаёт позицию до отрисовки кадра: SideEffect выполняется
             // сразу по применении композиции, а фаза draw читает holder
             SideEffect { holder.scrollbackScrollPx = scrollbackPx }
+            // Запись кадра (включается "#perf trace on"): по ней видно, рисуется ли
+            // промежуточное состояние -- текст не на месте, а следующим кадром на месте
+            SideEffect {
+                com.bylins.client.perf.PacketTrace.frame(
+                    lines = parsed.lineCount,
+                    contentHeight = contentHeight,
+                    maxScroll = maxScroll,
+                    scroll = scrollbackPx,
+                    split = !isEmpty && scrollbackPx < maxScroll - lineHeightPx
+                )
+            }
             // Раздвоение (видимость разделителя) выводим прямо из позиции скролла:
             // скроллбэк не у самого низа ⇒ есть разрыв с живым хвостом.
             val split = !isEmpty && scrollbackPx < maxScroll - lineHeightPx
