@@ -432,6 +432,21 @@ class ClientState {
      * Сколько команд помнит строка ввода: стрелки вверх-вниз и подстановка по Tab.
      * Столько же лежит в ~/.bylins-client/history.txt.
      */
+    /**
+     * Окно склейки обновлений вывода, мс: сколько ждать продолжения ответа, прежде чем
+     * перерисовывать. Буфер наполняется сразу, задержка касается только показа.
+     */
+    private val _outputCoalesceMs = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_COALESCE_MS)
+    val outputCoalesceMs: StateFlow<Int> = _outputCoalesceMs
+
+    fun setOutputCoalesceMs(ms: Int) {
+        val value = ms.coerceIn(0, com.bylins.client.config.MAX_OUTPUT_COALESCE_MS)
+        if (_outputCoalesceMs.value == value) return
+        _outputCoalesceMs.value = value
+        telnetClient.setOutputCoalesceMs(value)
+        saveConfig()
+    }
+
     private val _commandHistorySize = MutableStateFlow(com.bylins.client.config.DEFAULT_COMMAND_HISTORY_SIZE)
     val commandHistorySize: StateFlow<Int> = _commandHistorySize
 
@@ -729,6 +744,8 @@ class ClientState {
         telnetClient.setOutputBufferLines(configData.outputBufferLines)
         _commandHistorySize.value = configData.commandHistorySize
         commandHistory.maxSize = configData.commandHistorySize
+        _outputCoalesceMs.value = configData.outputCoalesceMs
+        telnetClient.setOutputCoalesceMs(configData.outputCoalesceMs)
 
         // Инициализируем скриптинг
         initializeScripting()
@@ -1967,6 +1984,7 @@ class ClientState {
             configBackups = _configBackups.value,
             outputBufferLines = _outputBufferLines.value,
             commandHistorySize = _commandHistorySize.value,
+            outputCoalesceMs = _outputCoalesceMs.value,
             pluginPermissions = _pluginPermissions.value,
             outputSplitFractions = getOutputSplitFractions()
         )
