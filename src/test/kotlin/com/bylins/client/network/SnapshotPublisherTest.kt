@@ -52,6 +52,37 @@ class SnapshotPublisherTest {
     }
 
     @Test
+    fun `с отметкой конца ответа окно тишины не торопит кадр`() {
+        // Хвост ответа приходит позже окна: без этого правила панель рисовала
+        // промежуточный кадр, а через три десятка миллисекунд -- настоящий
+        val scope = CoroutineScope(Dispatchers.IO)
+        val published = AtomicInteger()
+        val publisher = SnapshotPublisher(scope, delayMs = 20) { published.incrementAndGet() }
+        publisher.endMarkSeen = true
+
+        publisher.request()
+        Thread.sleep(120)
+
+        assertEquals(0, published.get(), "нарисовали, не дождавшись отметки конца ответа")
+
+        publisher.flush()
+        assertEquals(1, published.get())
+        scope.cancel()
+    }
+
+    @Test
+    fun `без отметки остаётся ожидание тишины`() {
+        val scope = CoroutineScope(Dispatchers.IO)
+        val published = AtomicInteger()
+        val publisher = SnapshotPublisher(scope, delayMs = 20) { published.incrementAndGet() }
+
+        publisher.request()
+
+        waitUntil("публикации по тишине") { published.get() == 1 }
+        scope.cancel()
+    }
+
+    @Test
     fun `нулевое окно публикует сразу`() {
         val scope = CoroutineScope(Dispatchers.IO)
         val published = AtomicInteger()

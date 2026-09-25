@@ -275,6 +275,9 @@ class TelnetClient(
                     // выставляем до разбора текста: сам кадр отдаём уже после того, как
                     // текст этого пакета ляжет в буфер
                     val answerEnded = telnetCommands.any { it.type == TelnetCommandType.END_OF_ANSWER }
+                    // Раз отметка приходит -- дальше ждём только её, а не время:
+                    // окно тишины опережало хвост ответа и рисовало промежуточный кадр
+                    if (answerEnded) publisher.endMarkSeen = true
 
                     if (text.isNotEmpty()) {
                         com.bylins.client.perf.PacketTrace.record(bytesRead, text)

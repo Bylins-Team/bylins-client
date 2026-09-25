@@ -24,6 +24,13 @@ import com.bylins.client.OperatingSystem
 import com.bylins.client.config.MAX_CONFIG_BACKUPS
 import com.bylins.client.config.MAX_OUTPUT_BUFFER_LINES
 import com.bylins.client.config.MIN_OUTPUT_BUFFER_LINES
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.unit.Dp
 import com.bylins.client.config.MAX_COMMAND_HISTORY_SIZE
 import com.bylins.client.config.MAX_OUTPUT_COALESCE_MS
 import com.bylins.client.config.MIN_COMMAND_HISTORY_SIZE
@@ -224,7 +231,6 @@ fun SettingsPanel(
                 // Глубина истории вывода. Платится памятью, не задержкой:
                 // на приход текста работа идёт по изменившимся строкам
                 val outputBufferLines by clientState.outputBufferLines.collectAsState()
-                var bufferText by remember(outputBufferLines) { mutableStateOf(outputBufferLines.toString()) }
 
                 Text(
                     text = "История вывода",
@@ -233,25 +239,11 @@ fun SettingsPanel(
                     fontFamily = FontFamily.Monospace
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = bufferText,
-                        onValueChange = { value ->
-                            bufferText = value.filter { it.isDigit() }.take(7)
-                            bufferText.toIntOrNull()?.let { clientState.setOutputBufferLines(it) }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(110.dp),
-                        textStyle = LocalTextStyle.current.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        colors = TextFieldDefaults.outlinedTextFieldColors(
-                            textColor = colorScheme.onSurface,
-                            backgroundColor = colorScheme.background,
-                            cursorColor = colorScheme.onSurface,
-                            focusedBorderColor = colorScheme.primary,
-                            unfocusedBorderColor = colorScheme.border
-                        )
+                    NumberSettingField(
+                        value = outputBufferLines,
+                        onApply = { clientState.setOutputBufferLines(it) },
+                        maxDigits = 7,
+                        width = 110.dp
                     )
                     Text(
                         text = "строк держится в памяти и доступно прокруткой, поиском и выделением " +
@@ -268,7 +260,6 @@ fun SettingsPanel(
 
                 // Глубина истории ввода: стрелки и подстановка по Tab
                 val commandHistorySize by clientState.commandHistorySize.collectAsState()
-                var historyText by remember(commandHistorySize) { mutableStateOf(commandHistorySize.toString()) }
 
                 Text(
                     text = "История команд",
@@ -277,25 +268,11 @@ fun SettingsPanel(
                     fontFamily = FontFamily.Monospace
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = historyText,
-                        onValueChange = { value ->
-                            historyText = value.filter { it.isDigit() }.take(5)
-                            historyText.toIntOrNull()?.let { clientState.setCommandHistorySize(it) }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(110.dp),
-                        textStyle = LocalTextStyle.current.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        colors = TextFieldDefaults.outlinedTextFieldColors(
-                            textColor = colorScheme.onSurface,
-                            backgroundColor = colorScheme.background,
-                            cursorColor = colorScheme.onSurface,
-                            focusedBorderColor = colorScheme.primary,
-                            unfocusedBorderColor = colorScheme.border
-                        )
+                    NumberSettingField(
+                        value = commandHistorySize,
+                        onApply = { clientState.setCommandHistorySize(it) },
+                        maxDigits = 5,
+                        width = 110.dp
                     )
                     Text(
                         text = "команд помнит строка ввода: стрелки вверх-вниз и подстановка по Tab " +
@@ -312,7 +289,6 @@ fun SettingsPanel(
 
                 // Склейка обновлений вывода: сеть режет ответ сервера на куски
                 val outputCoalesceMs by clientState.outputCoalesceMs.collectAsState()
-                var coalesceText by remember(outputCoalesceMs) { mutableStateOf(outputCoalesceMs.toString()) }
 
                 Text(
                     text = "Склейка вывода",
@@ -321,25 +297,11 @@ fun SettingsPanel(
                     fontFamily = FontFamily.Monospace
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = coalesceText,
-                        onValueChange = { value ->
-                            coalesceText = value.filter { it.isDigit() }.take(3)
-                            coalesceText.toIntOrNull()?.let { clientState.setOutputCoalesceMs(it) }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(110.dp),
-                        textStyle = LocalTextStyle.current.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        colors = TextFieldDefaults.outlinedTextFieldColors(
-                            textColor = colorScheme.onSurface,
-                            backgroundColor = colorScheme.background,
-                            cursorColor = colorScheme.onSurface,
-                            focusedBorderColor = colorScheme.primary,
-                            unfocusedBorderColor = colorScheme.border
-                        )
+                    NumberSettingField(
+                        value = outputCoalesceMs,
+                        onApply = { clientState.setOutputCoalesceMs(it) },
+                        maxDigits = 3,
+                        width = 110.dp
                     )
                     Text(
                         text = "мс ждать продолжения ответа, прежде чем перерисовать вывод " +
@@ -358,7 +320,6 @@ fun SettingsPanel(
                 // Резервные копии настроек: список триггеров копится месяцами,
                 // а испорченную запись замечаешь далеко не сразу
                 val configBackups by clientState.configBackups.collectAsState()
-                var backupsText by remember(configBackups) { mutableStateOf(configBackups.toString()) }
 
                 Text(
                     text = "Резервные копии настроек",
@@ -367,25 +328,11 @@ fun SettingsPanel(
                     fontFamily = FontFamily.Monospace
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(
-                        value = backupsText,
-                        onValueChange = { text ->
-                            backupsText = text.filter { it.isDigit() }.take(2)
-                            backupsText.toIntOrNull()?.let { clientState.setConfigBackups(it) }
-                        },
-                        singleLine = true,
-                        modifier = Modifier.width(90.dp),
-                        textStyle = LocalTextStyle.current.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        ),
-                        colors = TextFieldDefaults.outlinedTextFieldColors(
-                            textColor = colorScheme.onSurface,
-                            backgroundColor = colorScheme.background,
-                            cursorColor = colorScheme.onSurface,
-                            focusedBorderColor = colorScheme.primary,
-                            unfocusedBorderColor = colorScheme.border
-                        )
+                    NumberSettingField(
+                        value = configBackups,
+                        onApply = { clientState.setConfigBackups(it) },
+                        maxDigits = 2,
+                        width = 90.dp
                     )
                     Text(
                         text = if (configBackups == 0) {
@@ -1065,4 +1012,64 @@ private fun openFile(path: String) {
     } catch (e: Exception) {
         logger.error { "Error opening file: ${e.message}" }
     }
+}
+
+
+/**
+ * Числовая настройка: набранное применяется по Enter или когда уходит фокус.
+ *
+ * Раньше значение применялось на каждое нажатие, и по пути в конфиг попадали огрызки:
+ * набираешь 40 -- успевает записаться 4. А чтобы применить, приходилось щёлкать в другое
+ * поле, потому что Enter ничего не делал.
+ *
+ * После применения текст берётся из самой настройки: если число вышло за пределы, в поле
+ * видно, к чему его привели.
+ */
+@Composable
+private fun NumberSettingField(
+    value: Int,
+    onApply: (Int) -> Unit,
+    maxDigits: Int,
+    width: Dp
+) {
+    val colorScheme = LocalAppColorScheme.current
+    var text by remember(value) { mutableStateOf(value.toString()) }
+
+    fun apply() {
+        val typed = text.toIntOrNull()
+        if (typed == null) {
+            text = value.toString()   // пусто или мусор -- возвращаем как было
+        } else {
+            onApply(typed)
+        }
+    }
+
+    OutlinedTextField(
+        value = text,
+        onValueChange = { typed -> text = typed.filter { it.isDigit() }.take(maxDigits) },
+        singleLine = true,
+        modifier = Modifier
+            .width(width)
+            .onFocusChanged { state -> if (!state.isFocused) apply() }
+            .onPreviewKeyEvent { event ->
+                val enter = event.key == Key.Enter || event.key == Key.NumPadEnter
+                if (enter && event.type == KeyEventType.KeyDown) {
+                    apply()
+                    true
+                } else {
+                    enter   // KeyUp тоже съедаем, иначе он уйдёт дальше как обычный Enter
+                }
+            },
+        textStyle = LocalTextStyle.current.copy(
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp
+        ),
+        colors = TextFieldDefaults.outlinedTextFieldColors(
+            textColor = colorScheme.onSurface,
+            backgroundColor = colorScheme.background,
+            cursorColor = colorScheme.onSurface,
+            focusedBorderColor = colorScheme.primary,
+            unfocusedBorderColor = colorScheme.border
+        )
+    )
 }
