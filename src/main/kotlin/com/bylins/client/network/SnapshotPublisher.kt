@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Склейка обновлений вывода: показать один кадр вместо нескольких на один ответ сервера.
@@ -38,6 +39,10 @@ class SnapshotPublisher(
     // Заявки склеиваются: пока ждём тишины, все пришедшие куски дадут одну публикацию
     private val requests = Channel<Unit>(Channel.CONFLATED)
 
+    // Есть ли что показывать. Без него оставшаяся в канале заявка давала лишнюю
+    // публикацию уже показанного -- лишний кадр на ровном месте
+    private val pending = AtomicBoolean(false)
+
     init {
         scope.launch {
             for (unused in requests) {
@@ -47,7 +52,9 @@ class SnapshotPublisher(
                     withTimeoutOrNull(delayMs) { requests.receive() } ?: break
                     if ((System.nanoTime() - started) / 1_000_000 >= maxDelayMs) break
                 }
-                publish()
+                if (pending.getAndSet(false)) {
+                    publish()
+                }
             }
         }
     }
@@ -57,17 +64,23 @@ class SnapshotPublisher(
         const val MAX_HOLD_MS = 150L
     }
 
-    /** Пришёл текст. Публикация -- сразу или по истечении окна. */
+    /** Пришёл текст. Публикация -- сразу или по истечении окна тишины. */
     fun request() {
         if (delayMs <= 0) {
+            pending.set(false)
             publish()
             return
         }
+        pending.set(true)
         requests.trySend(Unit)
     }
 
-    /** Отдать накопленное немедленно (разрыв связи, локальный вывод команды). */
+    /**
+     * Отдать накопленное немедленно: сервер сказал "ответ закончен" (IAC GA), пришёл
+     * локальный вывод или своё эхо.
+     */
     fun flush() {
+        pending.set(false)
         publish()
     }
 }

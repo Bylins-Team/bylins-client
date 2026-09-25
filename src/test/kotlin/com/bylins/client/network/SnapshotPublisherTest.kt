@@ -38,6 +38,20 @@ class SnapshotPublisherTest {
     }
 
     @Test
+    fun `после публикации лишнего кадра не будет`() {
+        val scope = CoroutineScope(Dispatchers.IO)
+        val published = AtomicInteger()
+        val publisher = SnapshotPublisher(scope, delayMs = 30) { published.incrementAndGet() }
+
+        repeat(5) { publisher.request() }
+        waitUntil("первой публикации") { published.get() >= 1 }
+        Thread.sleep(200)
+
+        assertEquals(1, published.get(), "показали уже показанное")
+        scope.cancel()
+    }
+
+    @Test
     fun `нулевое окно публикует сразу`() {
         val scope = CoroutineScope(Dispatchers.IO)
         val published = AtomicInteger()
