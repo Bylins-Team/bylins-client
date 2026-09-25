@@ -58,6 +58,36 @@ class InputFocusPolicyTest {
     }
 
     @Test
+    fun `на вкладке настроек фокус не забираем`() {
+        // Иначе набранное в поле настройки уезжает в строку ввода
+        assertFalse(
+            InputFocusPolicy.shouldFocusInput(
+                key = Key.Four,
+                isCtrlPressed = false,
+                isAltPressed = false,
+                isMetaPressed = false,
+                secondaryFieldFocused = false,
+                gameTabFocused = false
+            ),
+            "на вкладке настроек клавиша увела фокус в строку ввода"
+        )
+    }
+
+    @Test
+    fun `на вкладке с игрой фокус по-прежнему возвращается`() {
+        assertTrue(
+            InputFocusPolicy.shouldFocusInput(
+                key = Key.Four,
+                isCtrlPressed = false,
+                isAltPressed = false,
+                isMetaPressed = false,
+                secondaryFieldFocused = false,
+                gameTabFocused = true
+            )
+        )
+    }
+
+    @Test
     fun `правку другого поля не перебиваем`() {
         assertFalse(focus(Key.A, secondary = true))
     }

@@ -157,7 +157,10 @@ fun MainWindow() {
                                     isCtrlPressed = event.isCtrlPressed,
                                     isAltPressed = event.isAltPressed,
                                     isMetaPressed = event.isMetaPressed,
-                                    secondaryFieldFocused = secondaryTextFieldFocused
+                                    secondaryFieldFocused = secondaryTextFieldFocused,
+                                    // На вкладках настроек, триггеров и прочих набранное
+                                    // должно попадать в тамошние поля, а не в строку ввода
+                                    gameTabFocused = selectedTabId == "main"
                                 )
                             ) {
                                 // Если hotkey не обработан и клавишей можно печатать,

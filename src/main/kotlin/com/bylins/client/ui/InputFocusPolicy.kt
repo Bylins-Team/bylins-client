@@ -36,13 +36,19 @@ object InputFocusPolicy {
     /**
      * @param key клавиша нажатия, не разобранного как хоткей
      * @param secondaryFieldFocused правится другое поле (диалог, поиск) — туда не лезем
+     * @param gameTabFocused открыта вкладка с игрой. На прочих вкладках (настройки,
+     *   триггеры, алиасы) текст набирают в тамошние поля, и перехват фокуса означал бы,
+     *   что набранное уезжает в строку ввода: правило «любая клавиша возвращает фокус»
+     *   придумано для игры, а не для правки настроек
      */
     fun shouldFocusInput(
         key: Key,
         isCtrlPressed: Boolean,
         isAltPressed: Boolean,
         isMetaPressed: Boolean,
-        secondaryFieldFocused: Boolean
+        secondaryFieldFocused: Boolean,
+        gameTabFocused: Boolean = true
     ): Boolean =
-        !isCtrlPressed && !isAltPressed && !isMetaPressed && !secondaryFieldFocused && key !in keepFocusKeys
+        gameTabFocused && !isCtrlPressed && !isAltPressed && !isMetaPressed
+            && !secondaryFieldFocused && key !in keepFocusKeys
 }
