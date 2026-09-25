@@ -490,7 +490,8 @@ class CommandProcessor(
     /**
      * Отчёт по замерам: этапы, память, сборщик мусора.
      *
-     * `#perf reset` обнуляет, `#perf slow <мс>` меняет порог жалоб в лог.
+     * `#perf reset` обнуляет, `#perf slow <мс>` меняет порог жалоб в лог,
+     * `#perf trace on|off` пишет приход пакетов с миллисекундами.
      */
     private fun showPerf(argument: String) {
         val parts = argument.split(" ").filter { it.isNotEmpty() }
@@ -509,7 +510,21 @@ class CommandProcessor(
                     context.addLocalOutput("[#perf] Порог жалобы в лог: $ms мс")
                 }
             }
-            else -> context.addLocalOutput("[#perf] Использование: #perf [reset|slow <мс>]")
+            "trace" -> {
+                // "#perf trace" и "#perf trace on" включают, "#perf trace off" выключает
+                if (parts.getOrNull(1)?.lowercase() == "off") {
+                    com.bylins.client.perf.PacketTrace.stop()
+                    context.addLocalOutput("[#perf] Запись пакетов закончена")
+                } else {
+                    val path = com.bylins.client.perf.PacketTrace.start()
+                    if (path == null) {
+                        context.addLocalOutput("[#perf] Не удалось начать запись пакетов")
+                    } else {
+                        context.addLocalOutput("[#perf] Пишу приход пакетов в $path (#perf trace off -- закончить)")
+                    }
+                }
+            }
+            else -> context.addLocalOutput("[#perf] Использование: #perf [reset|slow <мс>|trace on|trace off]")
         }
     }
 
