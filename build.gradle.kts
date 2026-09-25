@@ -8,6 +8,9 @@ val generatedMacOsIcon = layout.buildDirectory.file("generated/macos/icon.icns")
 // это на старте и перебирать каталоги в поисках плагинов.
 val isMacOsHost = System.getProperty("os.name").lowercase().contains("mac")
 
+/** Куда задача generateBuildInfo кладёт вшитую версию с ревизией. */
+val generatedVersionDir = layout.buildDirectory.dir("generated/version")
+
 /** Куда Compose кладёт образ. */
 val appImageDir = layout.buildDirectory.dir("compose/binaries/main/app")
 
@@ -92,6 +95,52 @@ dependencies {
 
 kotlin {
     jvmToolchain(17)
+    sourceSets["main"].kotlin.srcDir(generatedVersionDir)
+}
+
+/**
+ * Версия и ревизия, вшитые в сборку: клиент показывает их в заголовке окна, чтобы
+ * не путаться, какая именно сборка запущена.
+ *
+ * Файл переписывается только когда что-то изменилось: иначе каждая сборка
+ * перекомпилировала бы его и всё, что за ним, на ровном месте. По той же причине
+ * сюда не идёт время сборки -- оно менялось бы всегда.
+ */
+val generateBuildInfo by tasks.registering {
+    val outputDir = generatedVersionDir
+    val projectVersion = version.toString()
+    // Сборка из распакованного архива, без .git -- не повод падать: ревизия станет "unknown"
+    val revision = providers.exec {
+        commandLine("git", "rev-parse", "--short", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.map { it.trim() }.orElse("")
+
+    inputs.property("version", projectVersion)
+    inputs.property("revision", revision)
+    outputs.dir(outputDir)
+
+    doLast {
+        val target = outputDir.get().dir("com/bylins/client").asFile
+        target.mkdirs()
+        val text = buildString {
+            appendLine("package com.bylins.client")
+            appendLine()
+            appendLine("/** Собрано сборкой: версия и ревизия. Файл создаёт задача generateBuildInfo. */")
+            appendLine("object BuildInfo {")
+            appendLine("    const val VERSION = \"$projectVersion\"")
+            appendLine("    const val REVISION = \"${revision.get().ifEmpty { "unknown" }}\"")
+            appendLine()
+            appendLine("    /** \"1.0.3 (abc1234)\" -- для заголовка окна и отчётов. */")
+            appendLine("    val full: String = if (REVISION == \"unknown\") VERSION else \"\$VERSION (\$REVISION)\"")
+            appendLine("}")
+        }
+        val file = target.resolve("BuildInfo.kt")
+        if (!file.exists() || file.readText() != text) file.writeText(text)
+    }
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    dependsOn(generateBuildInfo)
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {

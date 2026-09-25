@@ -15,7 +15,8 @@ fun main() {
 
         Window(
             onCloseRequest = ::exitApplication,
-            title = "Bylins MUD Client",
+            // Версия и ревизия в заголовке: по окну видно, какая сборка запущена
+            title = "Bylins MUD Client ${BuildInfo.full}",
             state = windowState
         ) {
             MainWindow()
