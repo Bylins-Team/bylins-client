@@ -144,6 +144,9 @@ object Perf {
 
     /** Человекочитаемый отчёт: этапы плюс память и сборщик мусора. */
     fun report(): String = buildString {
+        // Сборка в отчёте: его и присылают при разборе тормозов, а по цифрам не понять,
+        // из какой сборки они взяты
+        appendLine("Сборка: ${com.bylins.client.BuildInfo.full}")
         appendLine("Этап                              вызовов   сумма    среднее   p95    макс     объём: среднее / наибольшее")
         for (stage in Stage.values()) {
             val c = stages.getValue(stage)
