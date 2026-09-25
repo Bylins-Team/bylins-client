@@ -42,7 +42,8 @@ class LineChunk(val firstSeq: Long, val lines: Array<String>) {
  * закрытый кусок — тот же кусок; на этом держится вся цена обновления.
  *
  * Последняя строка — незавершённая (промпт), к ней дописывается приходящий
- * текст. Текст с завершающим переводом строки заканчивается пустой строкой.
+ * текст. Завершающий перевод строки новой строки не создаёт: она появится
+ * вместе с текстом, который в неё придёт.
  */
 class LineSnapshot(val firstSeq: Long, val chunks: List<LineChunk>, val offset: Int) {
 
@@ -110,6 +111,10 @@ class LineBuffer(@Volatile var maxLines: Int) {
     private var offset = 0
     // Открытый хвост; его последняя строка — незавершённая
     private val open = ArrayList<String>()
+    // Последняя строка закрыта переводом строки: следующая появится вместе с текстом.
+    // Заводить её сразу нельзя -- пустая строка на кадр удлиняет буфер, вид прижат к низу,
+    // и весь текст дёргается вверх-вниз на строку при каждом ответе сервера.
+    private var pendingNewLine = false
 
     /** Абсолютный номер первой строки: растёт при вытеснении и очистке. */
     var firstSeq: Long = 0L
@@ -118,13 +123,17 @@ class LineBuffer(@Volatile var maxLines: Int) {
     val lineCount: Int get() = closed.size * LineChunk.SIZE - offset + open.size
     val isEmpty: Boolean get() = lineCount == 0
 
-    /** Последняя, незавершённая строка; null, если буфер пуст. */
-    val lastLine: String? get() = open.lastOrNull()
+    /** Последняя, незавершённая строка; null, если буфер пуст или строка закрыта. */
+    val lastLine: String? get() = if (pendingNewLine) null else open.lastOrNull()
 
     /**
      * Дописывает пришедший текст: кусок до первого перевода строки — к
-     * последней строке, остальное — новыми строками. Текст с переводом
-     * строки на конце оставляет пустую незавершённую строку.
+     * последней строке, остальное — новыми строками.
+     *
+     * Перевод строки в самом конце строку не заводит, а только закрывает текущую:
+     * следующая появится, когда в неё придёт текст. Иначе после каждого ответа сервера
+     * (он начинается с перевода строки, закрывающего промпт) буфер на кадр становился
+     * на строку длиннее, а вид прижат к низу — весь текст дёргался вверх и обратно.
      */
     fun append(text: String) {
         if (text.isEmpty()) return
@@ -134,7 +143,7 @@ class LineBuffer(@Volatile var maxLines: Int) {
             val newline = text.indexOf('\n', start)
             val end = if (newline == -1) text.length else newline
             val piece = text.substring(start, end)
-            if (first && open.isNotEmpty()) {
+            if (first && !pendingNewLine && open.isNotEmpty()) {
                 if (piece.isNotEmpty()) open[open.size - 1] = open.last() + piece
             } else {
                 push(piece)
@@ -142,6 +151,11 @@ class LineBuffer(@Volatile var maxLines: Int) {
             first = false
             if (newline == -1) break
             start = newline + 1
+            if (start == text.length) {
+                // Перевод строки последним символом: строку не заводим, только закрываем
+                pendingNewLine = true
+                break
+            }
         }
         trim()
     }
@@ -158,7 +172,7 @@ class LineBuffer(@Volatile var maxLines: Int) {
      * нет, просто добавляет.
      */
     fun insertBeforeIncomplete(text: String) {
-        val incomplete = open.lastOrNull()
+        val incomplete = lastLine
         if (incomplete.isNullOrEmpty()) {
             append(text + "\n")
             return
@@ -175,6 +189,7 @@ class LineBuffer(@Volatile var maxLines: Int) {
         closed.clear()
         offset = 0
         open.clear()
+        pendingNewLine = false
     }
 
     fun snapshot(): LineSnapshot {
@@ -187,6 +202,7 @@ class LineBuffer(@Volatile var maxLines: Int) {
     private fun openFirstSeq(): Long = firstSeq + closed.size * LineChunk.SIZE - offset
 
     private fun push(line: String) {
+        pendingNewLine = false
         if (open.size == LineChunk.SIZE) {
             closed.addLast(LineChunk(openFirstSeq(), open.toTypedArray()))
             open.clear()

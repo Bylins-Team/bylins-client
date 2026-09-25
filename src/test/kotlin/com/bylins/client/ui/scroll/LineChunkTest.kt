@@ -59,9 +59,7 @@ class LineChunkTest {
         val snapshot = buffer.snapshot()
 
         assertEquals(size, snapshot.lineCount)
-        // Последняя строка — пустая незавершённая: текст кончается переводом строки
-        for (i in 0 until size - 1) assertEquals("строка ${snapshot.firstSeq + i}", snapshot.lines[i], "строка $i")
-        assertEquals("", snapshot.lines[size - 1])
+        for (i in 0 until size) assertEquals("строка ${snapshot.firstSeq + i}", snapshot.lines[i], "строка $i")
         assertTrue(snapshot.chunks.all { it.size == size } || snapshot.chunks.last().size < size)
         assertEquals(snapshot.chunks[0].firstSeq + snapshot.offset, snapshot.firstSeq)
     }
@@ -89,7 +87,7 @@ class LineChunkTest {
 
         val snapshot = buffer.snapshot()
 
-        assertEquals((size + 6).toLong(), snapshot.firstSeq)
+        assertEquals((size + 5).toLong(), snapshot.firstSeq)
         assertEquals(listOf("новая"), snapshot.lines)
     }
 
@@ -136,8 +134,8 @@ class LineChunkTest {
         val after = cache.update(buffer.snapshot())
 
         assertSame(before.chunks[0], after.chunks[0])
-        // Разобраны только дописанная строка и новая пустая за ней
-        assertEquals(2, after.parsedCount)
+        // Разобрана только дописанная строка
+        assertEquals(1, after.parsedCount)
         assertEquals(1, after.lines[0].annotated.spanStyles.size, "цвет из вытесненного текста сохранился")
     }
 
