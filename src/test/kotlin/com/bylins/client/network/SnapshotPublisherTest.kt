@@ -65,14 +65,17 @@ class SnapshotPublisherTest {
 
     @Test
     fun `кусок в пределах окна отодвигает отрисовку`() {
+        // Окно нарочно большое: на загруженной машине sleep растягивается, и тест с
+        // близкими числами ловил бы не поведение, а планировщик
         val scope = CoroutineScope(Dispatchers.IO)
         val published = AtomicInteger()
-        val publisher = SnapshotPublisher(scope, delayMs = 40) { published.incrementAndGet() }
+        val publisher = SnapshotPublisher(scope, delayMs = 400) { published.incrementAndGet() }
 
         publisher.request()
-        Thread.sleep(25)          // хвост приехал в пределах окна
+        Thread.sleep(50)          // хвост приехал в пределах окна
         publisher.request()
-        Thread.sleep(25)          // прежнее окно уже истекло бы -- но мы ждём тишины
+        Thread.sleep(50)          // от первого куска прошло 100 мс -- фиксированное окно
+                                  // в 400 мс ещё не истекло бы, но и тишины не было
 
         assertEquals(0, published.get(), "отрисовали, не дождавшись тишины")
         waitUntil("публикации после тишины") { published.get() == 1 }
