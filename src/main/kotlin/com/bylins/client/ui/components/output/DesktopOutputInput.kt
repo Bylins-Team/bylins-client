@@ -97,6 +97,9 @@ fun ScrollbackOutputView(
     fontSize: Int,
     emptyPlaceholder: String,
     onSearchFocusChanged: (Boolean) -> Unit = {},
+    // Размер окна в знаках и строках -- уходит серверу по NAWS, чтобы он переносил
+    // текст по настоящему окну, а не по заданному руками числу
+    onScreenSize: (Int, Int) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
@@ -188,6 +191,11 @@ fun ScrollbackOutputView(
             val sampleHeight = sample.size.height.toFloat()
             val columns = (widthPx / sample.size.width.coerceAtLeast(1)).coerceAtLeast(1)
             val visibleLines = (fullViewportPx / lineHeightPx).toInt() + 1
+            // Сообщаем размер, когда он изменился: другое окно, другой шрифт или его размер
+            val screenRows = (fullViewportPx / lineHeightPx).toInt()
+            LaunchedEffect(columns, screenRows) {
+                onScreenSize(columns, screenRows)
+            }
             val anchorIndex = parsed.indexOfSeq(if (controller.followMode) parsed.lastSeq else holder.anchorSeq)
             val window = remember(parsed, widthPx, style, anchorIndex, visibleLines) {
                 val started = System.nanoTime()

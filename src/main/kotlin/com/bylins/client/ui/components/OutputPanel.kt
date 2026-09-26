@@ -248,6 +248,7 @@ fun OutputPanel(
                     fontSize = fontSize,
                     emptyPlaceholder = placeholder,
                     onSearchFocusChanged = { clientState.setSecondaryTextFieldFocused(it) },
+                    onScreenSize = { columns, rows -> clientState.setScreenSize(columns, rows) },
                     modifier = Modifier.fillMaxSize()
                 )
             }
