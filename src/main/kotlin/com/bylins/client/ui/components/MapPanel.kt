@@ -6,6 +6,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -15,7 +16,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -36,10 +45,16 @@ import androidx.compose.ui.unit.dp
 import com.bylins.client.ClientState
 import com.bylins.client.mapper.Direction
 import com.bylins.client.mapper.Room
+import com.bylins.client.mapper.ZoneList
 import com.bylins.client.ui.theme.LocalAppColorScheme
 
 @OptIn(ExperimentalComposeUiApi::class)
 private val logger = KotlinLogging.logger("MapPanel")
+private const val MIN_ZOOM = 0.3f
+private const val MAX_ZOOM = 3f
+// Один шаг масштаба — и кнопкам, и колесу, и клавишам: было 1.2 и 1.15
+private const val ZOOM_STEP = 1.2f
+
 @Composable
 fun MapPanel(
     clientState: ClientState,
@@ -84,6 +99,9 @@ fun MapPanel(
 
     // Zone panel width (resizable, persisted)
     val zonePanelWidth by clientState.zonePanelWidth.collectAsState()
+    // Панель зон: режим и строка поиска живут, пока открыта вкладка
+    var zoneListMode by remember { mutableStateOf(ZoneListMode.VISIBLE) }
+    var zoneQuery by remember { mutableStateOf("") }
 
     // Автоследование за игроком
     LaunchedEffect(currentRoomId, followPlayer) {
@@ -94,8 +112,12 @@ fun MapPanel(
         }
     }
 
-    // Используем viewCenterRoomId или currentRoomId
-    val effectiveCenterRoomId = viewCenterRoomId ?: currentRoomId
+    // Центр обзора: выбранный, иначе игрок, иначе — любая посещённая комната.
+    // Без подключения и центра карта просто пропадала: рисовать не от чего
+    val fallbackRoomId = remember(rooms) {
+        rooms.values.filter { it.visited }.minByOrNull { it.id }?.id ?: rooms.keys.minOrNull()
+    }
+    val effectiveCenterRoomId = viewCenterRoomId ?: currentRoomId ?: fallbackRoomId
 
     // Параметры отрисовки (масштабируемые)
     val baseRoomSize = 32f
@@ -125,6 +147,45 @@ fun MapPanel(
 
     // Keep updated reference for use in gesture handlers
     val currentDisplayRooms by rememberUpdatedState(displayRooms)
+
+    // Сдвиг карты — пока хоть одна комната остаётся на экране: иначе можно
+    // утащить карту в пустоту и не найти дорогу назад
+    val panBy: (Float, Float) -> Unit = { dx, dy ->
+        val canvasW = canvasSize.first
+        val canvasH = canvasSize.second
+        val shown = currentDisplayRooms
+        val allowed = if (canvasW > 0 && canvasH > 0 && shown.isNotEmpty()) {
+            val margin = roomSize / 2
+            shown.values.any { info ->
+                val newX = info.screenX + dx
+                val newY = info.screenY + dy
+                newX >= -margin && newX <= canvasW + margin && newY >= -margin && newY <= canvasH + margin
+            }
+        } else true
+        if (allowed) {
+            offsetX += dx
+            offsetY += dy
+        }
+    }
+    // Масштаб в [factor] раз; с [pivot] — так, чтобы точка под курсором осталась на месте
+    val zoomAt: (Float, Offset?) -> Unit = { factor, pivot ->
+        val newZoom = (zoom * factor).coerceIn(MIN_ZOOM, MAX_ZOOM)
+        if (pivot != null && newZoom != zoom) {
+            val anchorX = canvasSize.first / 2 + offsetX
+            val anchorY = canvasSize.second / 2 + offsetY
+            val f = newZoom / zoom
+            offsetX = pivot.x - (pivot.x - anchorX) * f - canvasSize.first / 2
+            offsetY = pivot.y - (pivot.y - anchorY) * f - canvasSize.second / 2
+        }
+        zoom = newZoom
+    }
+    // Смотреть на комнату: центр обзора на ней, без сдвига
+    val lookAt: (String) -> Unit = { roomId ->
+        followPlayer = false
+        viewCenterRoomId = roomId
+        offsetX = 0f
+        offsetY = 0f
+    }
 
     Column(modifier = modifier) {
         // Панель управления
@@ -182,12 +243,10 @@ fun MapPanel(
 
                 // Навигационные кнопки
                 if (!followPlayer) {
+                    // Без подключения игрока на карте нет — кнопке некуда вести
                     Button(
-                        onClick = {
-                            viewCenterRoomId = currentRoomId
-                            offsetX = 0f
-                            offsetY = 0f
-                        },
+                        onClick = { currentRoomId?.let(lookAt) },
+                        enabled = currentRoomId != null,
                         contentPadding = PaddingValues(8.dp)
                     ) {
                         Text("К игроку")
@@ -215,7 +274,7 @@ fun MapPanel(
 
                 // Масштаб
                 Button(
-                    onClick = { zoom = (zoom * 1.2f).coerceAtMost(3f) },
+                    onClick = { zoomAt(ZOOM_STEP, null) },
                     modifier = Modifier.size(32.dp),
                     contentPadding = PaddingValues(0.dp)
                 ) {
@@ -225,7 +284,7 @@ fun MapPanel(
                 Text("${(zoom * 100).toInt()}%", color = Color.White)
 
                 Button(
-                    onClick = { zoom = (zoom / 1.2f).coerceAtLeast(0.3f) },
+                    onClick = { zoomAt(1f / ZOOM_STEP, null) },
                     modifier = Modifier.size(32.dp),
                     contentPadding = PaddingValues(0.dp)
                 ) {
@@ -262,36 +321,63 @@ fun MapPanel(
                 // Get current zone for border styling
                 val currentZone = effectiveCenterRoomId?.let { rooms[it]?.zone }
 
-            // Click tracking via onPointerEvent
-            var pendingClickRoom by remember { mutableStateOf<Room?>(null) }
-            var pendingClickTime by remember { mutableStateOf(0L) }
+            // Клик — центр обзора сразу, без ожидания двойного: карта «думала»
+            // 300 мс на каждый клик. Двойной клик поверх открывает диалог —
+            // центр уже сделан, он не мешает
+            var lastClickRoomId by remember { mutableStateOf<String?>(null) }
+            var lastClickTime by remember { mutableStateOf(0L) }
             var pressPos by remember { mutableStateOf(Offset.Zero) }
             var totalDragDist by remember { mutableStateOf(0f) }
             var isPressed by remember { mutableStateOf(false) }
             val doubleClickTimeout = 300L
             val dragThreshold = 10f
-
-            // Execute pending single click after timeout
-            LaunchedEffect(pendingClickRoom, pendingClickTime) {
-                if (pendingClickRoom != null) {
-                    kotlinx.coroutines.delay(doubleClickTimeout)
-                    if (pendingClickRoom != null) {
-                        followPlayer = false
-                        viewCenterRoomId = pendingClickRoom!!.id
-                        offsetX = 0f
-                        offsetY = 0f
-                        pendingClickRoom = null
-                    }
-                }
-            }
+            val mapFocus = remember { FocusRequester() }
 
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(colorScheme.background)
+                    // Клавиатура работает, когда карта в фокусе — после клика по ней.
+                    // Стрелки ходят по комнатам, как компас: обзор переходит по
+                    // выходу С/Ю/З/В; PgUp/PgDn — вверх и вниз. Со сдвигом (Shift)
+                    // стрелки таскают саму карту на клетку. Enter — идти к комнате
+                    // обзора маршрутом (спидволк), карта при этом следует за игроком.
+                    // +/− — масштаб, Home — к игроку, Esc — снова следовать за ним
+                    .focusRequester(mapFocus)
+                    .focusable()
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        val step = roomSpacing
+                        val centerRoom = effectiveCenterRoomId?.let { rooms[it] }
+                        fun exitTo(direction: Direction): String? =
+                            centerRoom?.exits?.get(direction)?.targetRoomId?.takeIf { it.isNotEmpty() }
+                        fun floor(dz: Int): String? = centerRoom?.exits?.entries
+                            ?.firstOrNull { it.key.dz == dz && it.value.targetRoomId.isNotEmpty() }?.value?.targetRoomId
+                        val shift = event.isShiftPressed
+                        when (event.key) {
+                            Key.DirectionLeft -> { if (shift) panBy(step, 0f) else exitTo(Direction.WEST)?.let(lookAt); true }
+                            Key.DirectionRight -> { if (shift) panBy(-step, 0f) else exitTo(Direction.EAST)?.let(lookAt); true }
+                            Key.DirectionUp -> { if (shift) panBy(0f, step) else exitTo(Direction.NORTH)?.let(lookAt); true }
+                            Key.DirectionDown -> { if (shift) panBy(0f, -step) else exitTo(Direction.SOUTH)?.let(lookAt); true }
+                            Key.PageUp -> { floor(1)?.let(lookAt); true }
+                            Key.PageDown -> { floor(-1)?.let(lookAt); true }
+                            Key.Plus, Key.Equals, Key.NumPadAdd -> { zoomAt(ZOOM_STEP, null); true }
+                            Key.Minus, Key.NumPadSubtract -> { zoomAt(1f / ZOOM_STEP, null); true }
+                            Key.Enter, Key.NumPadEnter -> {
+                                effectiveCenterRoomId?.takeIf { it != currentRoomId }?.let { target ->
+                                    if (clientState.startWalk(target)) followPlayer = true
+                                }
+                                true
+                            }
+                            Key.MoveHome -> { currentRoomId?.let(lookAt); true }
+                            Key.Escape -> { followPlayer = true; true }
+                            else -> false
+                        }
+                    }
                     .onPointerEvent(PointerEventType.Press) { event ->
                         val change = event.changes.first()
                         if (event.button == PointerButton.Primary) {
+                            runCatching { mapFocus.requestFocus() }
                             pressPos = change.position
                             totalDragDist = 0f
                             isPressed = true
@@ -318,32 +404,8 @@ fun MapPanel(
                             if (dist > dragThreshold || totalDragDist > dragThreshold) {
                                 // It's a drag
                                 totalDragDist += (change.position - (if (totalDragDist > 0) change.previousPosition else pressPos)).getDistance()
-                                pendingClickRoom = null  // Cancel pending click
-
                                 val dragDelta = change.position - change.previousPosition
-                                val newOffsetX = offsetX + dragDelta.x
-                                val newOffsetY = offsetY + dragDelta.y
-
-                                val canvasW = canvasSize.first
-                                val canvasH = canvasSize.second
-                                val dragRooms = currentDisplayRooms
-
-                                if (canvasW > 0 && canvasH > 0 && dragRooms.isNotEmpty()) {
-                                    val margin = roomSize / 2
-                                    val anyVisible = dragRooms.values.any { roomInfo ->
-                                        val newX = roomInfo.screenX + dragDelta.x
-                                        val newY = roomInfo.screenY + dragDelta.y
-                                        newX >= -margin && newX <= canvasW + margin &&
-                                        newY >= -margin && newY <= canvasH + margin
-                                    }
-                                    if (anyVisible) {
-                                        offsetX = newOffsetX
-                                        offsetY = newOffsetY
-                                    }
-                                } else {
-                                    offsetX = newOffsetX
-                                    offsetY = newOffsetY
-                                }
+                                panBy(dragDelta.x, dragDelta.y)
                             }
                         }
                     }
@@ -356,15 +418,16 @@ fun MapPanel(
                                 val clickedRoom = findRoomAtPosition(displayRooms, pressPos.x, pressPos.y, roomSize)
 
                                 if (clickedRoom != null) {
-                                    if (pendingClickRoom?.id == clickedRoom.id) {
-                                        // Double click - open dialog only
-                                        pendingClickRoom = null
+                                    val now = System.currentTimeMillis()
+                                    if (lastClickRoomId == clickedRoom.id && now - lastClickTime < doubleClickTimeout) {
+                                        // Двойной клик — диалог комнаты
+                                        lastClickRoomId = null
                                         selectedRoom = clickedRoom
                                         showRoomDialog = true
                                     } else {
-                                        // Schedule single click (delayed to check for double-click)
-                                        pendingClickRoom = clickedRoom
-                                        pendingClickTime = System.currentTimeMillis()
+                                        lookAt(clickedRoom.id)
+                                        lastClickRoomId = clickedRoom.id
+                                        lastClickTime = now
                                     }
                                 }
                             }
@@ -375,12 +438,9 @@ fun MapPanel(
                         isPressed = false
                     }
                     .onPointerEvent(PointerEventType.Scroll) { event ->
-                        val delta = event.changes.first().scrollDelta.y
-                        zoom = if (delta < 0) {
-                            (zoom * 1.15f).coerceAtMost(3f)
-                        } else {
-                            (zoom / 1.15f).coerceAtLeast(0.3f)
-                        }
+                        val change = event.changes.first()
+                        // Вокруг курсора: то, на что смотришь, остаётся под ним
+                        zoomAt(if (change.scrollDelta.y < 0) ZOOM_STEP else 1f / ZOOM_STEP, change.position)
                     }
             ) {
                 canvasSize = Pair(size.width, size.height)
@@ -502,10 +562,20 @@ fun MapPanel(
                             )
                         }
 
-                        // Built-in: Edit room
                         if (customCommands.isNotEmpty()) {
                             Divider()
                         }
+                        // Built-in: идти сюда — то же, что Enter по комнате обзора
+                        DropdownMenuItem(
+                            text = { Text("Идти сюда") },
+                            enabled = currentRoomId != null && contextMenuRoom?.id != currentRoomId,
+                            onClick = {
+                                contextMenuRoom?.let { room ->
+                                    if (clientState.startWalk(room.id)) followPlayer = true
+                                }
+                                showContextMenu = false
+                            }
+                        )
                         DropdownMenuItem(
                             text = { Text("Редактировать") },
                             onClick = {
@@ -524,12 +594,7 @@ fun MapPanel(
                 DirectionPad(
                     room = viewCenterRoom,
                     allRooms = rooms,
-                    onNavigate = { targetRoomId ->
-                        followPlayer = false
-                        viewCenterRoomId = targetRoomId
-                        offsetX = 0f
-                        offsetY = 0f
-                    },
+                    onNavigate = lookAt,
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(8.dp)
@@ -537,8 +602,8 @@ fun MapPanel(
             }
             } // End of Box
 
-            // Панель зоны справа с ручкой для ресайза
-            if (currentZoneId.isNotEmpty()) {
+            // Панель зон справа с ручкой для ресайза
+            if (rooms.isNotEmpty()) {
                 // Ручка для изменения ширины (между картой и панелью)
                 Box(
                     modifier = Modifier
@@ -556,9 +621,45 @@ fun MapPanel(
                         }
                 )
 
-                ZonePanel(
-                    zoneName = currentZoneName,
-                    zoneNotes = currentZoneNotes,
+                val visibleZones = remember(displayRooms, zoneNamesMap) {
+                    ZoneList.visible(displayRooms.values.map { it.room }, zoneNamesMap)
+                }
+                val allZones = remember(rooms, zoneNamesMap, zoneQuery) {
+                    ZoneList.all(rooms.values, zoneNamesMap, zoneQuery)
+                }
+                val playerZoneId = currentRoomId?.let { rooms[it]?.zone }
+
+                ZonesPanel(
+                    mode = zoneListMode,
+                    onModeChange = { zoneListMode = it },
+                    query = zoneQuery,
+                    onQueryChange = { zoneQuery = it },
+                    visibleZones = visibleZones,
+                    allZones = allZones,
+                    playerZoneId = playerZoneId,
+                    viewZoneId = currentZoneId.takeIf { it.isNotEmpty() },
+                    viewZoneTitle = currentZoneName,
+                    viewZoneNotes = currentZoneNotes,
+                    onSelectZone = { zoneId ->
+                        // Из отрисованных комнат зоны — ближайшая к центру обзора,
+                        // чтобы карта не прыгала; зоны нет на экране — её комната
+                        // входа, BFS пойдёт от неё и связность не нужна
+                        val shown = displayRooms.values.filter { it.room.zone == zoneId }
+                        val target = shown.minByOrNull { kotlin.math.abs(it.gridX) + kotlin.math.abs(it.gridY) }?.room?.id
+                            ?: ZoneList.entryRoom(zoneId, rooms.values)
+                        if (target != null) {
+                            lookAt(target)
+                            if (shown.isNotEmpty()) {
+                                val width = shown.maxOf { it.gridX } - shown.minOf { it.gridX }
+                                val height = shown.maxOf { it.gridY } - shown.minOf { it.gridY }
+                                zoom = ZoneList.zoomToFit(
+                                    gridWidth = width, gridHeight = height,
+                                    canvasWidth = canvasSize.first, canvasHeight = canvasSize.second,
+                                    baseSpacing = baseRoomSpacing, min = MIN_ZOOM, max = MAX_ZOOM
+                                )
+                            }
+                        }
+                    },
                     onNotesChanged = { newNotes ->
                         clientState.setZoneNotes(currentZoneId, newNotes)
                     },
@@ -892,113 +993,6 @@ private fun GoToRoomDialog(
                     TextButton(onClick = onDismiss) {
                         Text("Закрыть", color = Color.White)
                     }
-                }
-            }
-        }
-    }
-}
-
-/**
- * Панель заметок зоны
- */
-@Composable
-private fun ZonePanel(
-    zoneName: String,
-    zoneNotes: String,
-    onNotesChanged: (String) -> Unit,
-    onFocusChanged: (Boolean) -> Unit,
-    width: Dp = 220.dp,
-    modifier: Modifier = Modifier
-) {
-    val colorScheme = LocalAppColorScheme.current
-    var notes by remember(zoneName) { mutableStateOf(zoneNotes) }
-
-    // Обновляем локальное состояние при изменении внешнего
-    LaunchedEffect(zoneNotes) {
-        notes = zoneNotes
-    }
-
-    // Сбрасываем фокус при размонтировании
-    DisposableEffect(Unit) {
-        onDispose {
-            onFocusChanged(false)
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .width(width)
-            .fillMaxHeight()
-            .background(colorScheme.surface)
-            .padding(8.dp)
-    ) {
-        // Заголовок зоны
-        Text(
-            text = zoneName,
-            style = MaterialTheme.typography.titleSmall,
-            color = colorScheme.onSurface
-        )
-
-        Divider(
-            modifier = Modifier.padding(vertical = 4.dp),
-            color = colorScheme.divider
-        )
-
-        // Поле заметок с дебаунсом для автосохранения
-        OutlinedTextField(
-            value = notes,
-            onValueChange = { newValue ->
-                notes = newValue
-                onNotesChanged(newValue)
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .onFocusChanged { focusState ->
-                    onFocusChanged(focusState.isFocused)
-                },
-            placeholder = {
-                Text(
-                    "Заметки о зоне...\n\nПоддерживается **жирный** и *курсив*",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colorScheme.onSurfaceVariant
-                )
-            },
-            textStyle = MaterialTheme.typography.bodySmall.copy(color = colorScheme.onSurface),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = colorScheme.primary,
-                unfocusedBorderColor = colorScheme.border,
-                cursorColor = colorScheme.primary
-            )
-        )
-
-        // Превью markdown
-        if (notes.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "Превью:",
-                style = MaterialTheme.typography.labelSmall,
-                color = colorScheme.onSurfaceVariant
-            )
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 160.dp),
-                color = colorScheme.background,
-                shape = MaterialTheme.shapes.small
-            ) {
-                // Заметки бывают длинными (по зоне — на десяток строк),
-                // поэтому превью прокручивается, а не обрезается молча
-                Box(
-                    modifier = Modifier
-                        .padding(4.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    MarkdownText(
-                        text = notes,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colorScheme.onSurface
-                    )
                 }
             }
         }
