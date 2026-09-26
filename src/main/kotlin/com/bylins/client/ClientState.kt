@@ -439,6 +439,14 @@ class ClientState {
     private val _outputCoalesceMs = MutableStateFlow(com.bylins.client.config.DEFAULT_OUTPUT_COALESCE_MS)
     val outputCoalesceMs: StateFlow<Int> = _outputCoalesceMs
 
+    /**
+     * Размер окна вывода в знаках и строках -- уходит серверу по NAWS, чтобы он переносил
+     * текст ровно по нашему окну. Зовётся панелью вывода при изменении окна или шрифта.
+     */
+    fun setScreenSize(columns: Int, rows: Int) {
+        telnetClient.setWindowSize(columns, rows)
+    }
+
     fun setOutputCoalesceMs(ms: Int) {
         val value = ms.coerceIn(0, com.bylins.client.config.MAX_OUTPUT_COALESCE_MS)
         if (_outputCoalesceMs.value == value) return

@@ -36,6 +36,17 @@ class TelnetClient(
     private val _snapshot = MutableStateFlow(LineSnapshot.EMPTY)
     val snapshot: StateFlow<LineSnapshot> = _snapshot
 
+    // Сервер согласился принимать размер окна (ответил IAC DO NAWS)
+    @Volatile
+    private var nawsAccepted = false
+
+    // Последний сообщённый размер: пересылаем только изменения
+    @Volatile
+    private var sentColumns = 0
+
+    @Volatile
+    private var sentRows = 0
+
     /**
      * Склейка обновлений вывода. Окно приходит из конфига (outputCoalesceMs).
      */
@@ -44,6 +55,33 @@ class TelnetClient(
         delayMs = com.bylins.client.config.DEFAULT_OUTPUT_COALESCE_MS.toLong()
     ) {
         synchronized(bufferLock) { _snapshot.value = buffer.snapshot() }
+    }
+
+    /**
+     * Размер окна вывода в знаках и строках -- для NAWS.
+     *
+     * Зовётся панелью вывода при изменении окна или шрифта. Пока сервер не согласился
+     * принимать размер, значение просто запоминается и уйдёт после согласия.
+     */
+    fun setWindowSize(columns: Int, rows: Int) {
+        if (columns !in Naws.MIN_COLUMNS..Naws.MAX_COLUMNS || rows !in Naws.MIN_ROWS..Naws.MAX_ROWS) {
+            return
+        }
+        if (columns == sentColumns && rows == sentRows) {
+            return
+        }
+        sentColumns = columns
+        sentRows = rows
+        sendWindowSize(force = false)
+    }
+
+    private fun sendWindowSize(force: Boolean) {
+        if (!nawsAccepted || !_isConnected.value) return
+        if (sentColumns == 0 || sentRows == 0) return
+        sendTelnetCommand(Naws.subnegotiation(sentColumns, sentRows))
+        if (force) {
+            logger.info { "NAWS: сообщил размер окна $sentColumns x $sentRows" }
+        }
     }
 
     fun setOutputCoalesceMs(ms: Int) {
@@ -88,6 +126,9 @@ class TelnetClient(
             // ничего, ошибка уходила только во всплывающее сообщение.
             appendToBuffer("\u001B[1;33m[Подключение к $host:$port...]\u001B[0m\n")
 
+            // Переговоры начинаются заново: согласие прошлого соединения не в счёт,
+            // а размер посылаем сразу после согласия
+            nawsAccepted = false
             socket = Socket(host, port)
             inputStream = socket?.getInputStream()
             outputStream = socket?.getOutputStream()
@@ -309,8 +350,9 @@ class TelnetClient(
         // IAC WILL TERMINAL_TYPE
         sendTelnetCommand(byteArrayOf(IAC, WILL, TERMINAL_TYPE))
 
-        // IAC DO NAWS (Negotiate About Window Size)
-        sendTelnetCommand(byteArrayOf(IAC, DO, NAWS))
+        // IAC WILL NAWS: размер окна сообщает клиент, а не сервер -- раньше мы просили
+        // сервер сообщать нам (IAC DO NAWS), и сторона, которая должна говорить, молчала
+        sendTelnetCommand(byteArrayOf(IAC, WILL, NAWS))
 
         // IAC WILL MSDP
         sendTelnetCommand(byteArrayOf(IAC, WILL, MSDP))
@@ -347,6 +389,11 @@ class TelnetClient(
                 when (command.option) {
                     TERMINAL_TYPE -> sendTelnetCommand(byteArrayOf(IAC, WILL, TERMINAL_TYPE))
                     MSDP -> sendTelnetCommand(byteArrayOf(IAC, WILL, MSDP))
+                    NAWS -> {
+                        // Согласился принимать размер окна -- сообщаем текущий
+                        nawsAccepted = true
+                        sendWindowSize(force = true)
+                    }
                 }
             }
             TelnetCommandType.WILL -> {
